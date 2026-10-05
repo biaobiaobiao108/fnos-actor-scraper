@@ -57,7 +57,7 @@ func (client *FnOSClient) request(ctx context.Context, path string, method strin
 	}
 	var envelope apiEnvelope
 	if err := json.Unmarshal(data, &envelope); err != nil {
-		return fmt.Errorf("FnOS API %s 返回无效 JSON：%w", path, err)
+		return fmt.Errorf("FnOS API %s 返回非 JSON 响应（HTTP %d，Content-Type %s）：%w；请检查 FNOS_URL、容器网络模式和 NO_PROXY", path, response.StatusCode, response.Header.Get("Content-Type"), err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 || envelope.Code != nil && *envelope.Code != 0 {
 		message := envelope.Msg
@@ -89,7 +89,7 @@ func (client *FnOSClient) Login(ctx context.Context) error {
 		return fmt.Errorf("请设置 FNOS_USERNAME 和 FNOS_PASSWORD，或提供 FNOS_TOKEN")
 	}
 	hash := sha256.Sum256([]byte(client.password))
-	body, _ := json.Marshal(map[string]string{"username": client.username, "password": hex.EncodeToString(hash[:])})
+	body, _ := json.Marshal(map[string]string{"username": client.username, "password": hex.EncodeToString(hash[:]), "app_name": "trimemedia-web"})
 	var result struct {
 		Token string `json:"token"`
 	}

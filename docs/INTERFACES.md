@@ -116,7 +116,7 @@ volumes:
 
 | 方法与路径 | 用途 |
 | --- | --- |
-| `POST /v/api/v1/user/loginByPassword?channel=v2` | 飞牛用户登录 |
+| `POST /v/api/v1/user/loginByPassword?channel=v2` | 飞牛用户登录；发送 `username`、SHA-256 十六进制密码摘要和 `app_name=trimemedia-web` |
 | `POST /v/api/v1/person/search` | 按名称查找 person |
 | `POST /v/api/v1/person/getEditDetail` | 读取档案、官方标记和字段锁定信息 |
 | `POST /v/api/v1/image/temp/upload` | 上传头像并取得临时图片标识 |
