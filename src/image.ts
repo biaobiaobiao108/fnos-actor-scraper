@@ -3,6 +3,12 @@ import { fetchUpstream } from "./util.ts";
 
 const MAX_DOWNLOAD = 10 * 1024 * 1024;
 const MAX_UPLOAD = 4 * 1024 * 1024;
+const MAX_PIXELS = 16_000_000;
+
+// sharp keeps decoded pixel data in native memory. Bound its cache and worker
+// count so large source images cannot multiply memory use across CPU cores.
+sharp.cache({ memory: 32, files: 0, items: 4 });
+sharp.concurrency(1);
 
 function isPublicHost(host: string): boolean {
   const value = host.toLowerCase().replace(/^\[|\]$/g, "");
@@ -23,9 +29,10 @@ export async function fetchPortrait(urlText: string): Promise<Uint8Array> {
   if (declared > MAX_DOWNLOAD) throw new Error("头像原图超过 10 MiB 限制");
   const source = new Uint8Array(await response.arrayBuffer());
   if (source.byteLength > MAX_DOWNLOAD) throw new Error("头像原图超过 10 MiB 限制");
-  const metadata = await sharp(source, { limitInputPixels: 40_000_000 }).metadata();
+  const metadata = await sharp(source, { limitInputPixels: MAX_PIXELS }).metadata();
   if (!metadata.width || !metadata.height) throw new Error("无法识别头像图片");
-  const output = await sharp(source, { limitInputPixels: 40_000_000 })
+  if (metadata.width * metadata.height > MAX_PIXELS) throw new Error("头像原图超过 1600 万像素限制");
+  const output = await sharp(source, { limitInputPixels: MAX_PIXELS })
     .rotate()
     .resize(640, 960, { fit: "cover", position: "centre" })
     .jpeg({ quality: 88, mozjpeg: true })

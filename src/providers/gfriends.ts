@@ -9,7 +9,9 @@ type FileTree = {
 
 const TREE_URL = "https://cdn.jsdelivr.net/gh/gfriends/gfriends@master/Filetree.json";
 
-async function getTree(cacheDir: string, refresh: boolean): Promise<FileTree> {
+let treeInFlight: { cacheDir: string; promise: Promise<FileTree> } | undefined;
+
+async function loadTree(cacheDir: string, refresh: boolean): Promise<FileTree> {
   const filePath = join(cacheDir, "gfriends-filetree.json");
   if (!refresh) {
     try {
@@ -29,6 +31,18 @@ async function getTree(cacheDir: string, refresh: boolean): Promise<FileTree> {
   await mkdir(cacheDir, { recursive: true });
   await writeFile(filePath, JSON.stringify(tree), "utf8");
   return tree;
+}
+
+function getTree(cacheDir: string, refresh: boolean): Promise<FileTree> {
+  // Filetree.json is shared by every actor. Share both parsing and downloads
+  // within the process instead of loading the full tree once per worker.
+  if (treeInFlight?.cacheDir === cacheDir) return treeInFlight.promise;
+  const promise = loadTree(cacheDir, refresh).catch((error) => {
+    if (treeInFlight?.promise === promise) treeInFlight = undefined;
+    throw error;
+  });
+  treeInFlight = { cacheDir, promise };
+  return promise;
 }
 
 function imageCandidates(tree: FileTree, name: string): string[] {

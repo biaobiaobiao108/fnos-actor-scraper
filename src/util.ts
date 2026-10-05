@@ -46,6 +46,30 @@ async function readResponseBody(response: Response, maxBytes: number): Promise<A
     throw new Error(`上游响应超过 ${maxBytes} 字节限制`);
   }
   const reader = response.body.getReader();
+  // Keep the chunks only until the final allocation; never accept an unbounded body.
+  // If Content-Length is known, allocate once and fill it directly to avoid retaining
+  // both a chunk list and a second full-sized copy for large JSON/image responses.
+  if (declared > 0 && !response.headers.has("content-encoding")) {
+    const buffer = new ArrayBuffer(declared);
+    const output = new Uint8Array(buffer);
+    let offset = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (offset + value.byteLength > declared || offset + value.byteLength > maxBytes) {
+          await reader.cancel();
+          throw new Error(`上游响应超过 ${maxBytes} 字节限制`);
+        }
+        output.set(value, offset);
+        offset += value.byteLength;
+      }
+    } catch (error) {
+      if (offset < declared) await reader.cancel().catch(() => undefined);
+      throw error;
+    }
+    return offset === declared ? buffer : buffer.slice(0, offset);
+  }
   const chunks: Uint8Array[] = [];
   let total = 0;
   while (true) {
@@ -66,7 +90,7 @@ async function readResponseBody(response: Response, maxBytes: number): Promise<A
 }
 
 /** Serialize upstream HTTP calls, spacing each request and backing off on throttling/server errors. */
-export function fetchUpstream(url: string | URL, init: RequestInit = {}, maxBodyBytes = 25 * 1024 * 1024): Promise<Response> {
+export function fetchUpstream(url: string | URL, init: RequestInit = {}, maxBodyBytes = 16 * 1024 * 1024): Promise<Response> {
   const run = async (): Promise<Response> => {
     const delay = upstreamDelayMs();
     for (let attempt = 0; attempt < 3; attempt++) {

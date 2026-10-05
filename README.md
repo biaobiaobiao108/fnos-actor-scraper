@@ -21,6 +21,7 @@ ghcr.io/biaobiaobiao108/fnos-actor-scraper:latest
 ```
 
 复制 `.env.example` 为 `.env`，填写 `FNOS_URL` 和登录用户名/密码（或当前有效的 `FNOS_TOKEN`）。密码以明文保存在 `.env`，请限制文件权限并勿提交到 Git。
+如果访问公网来源需要代理，可在 `.env` 中设置 `http_proxy` 与 `https_proxy`；Compose 会同时传入大小写两种环境变量。`no_proxy` 默认包含 NAS 地址，保证飞牛 API 连接直达 NAS。
 
 默认 Compose 会挂载以下目录：
 
@@ -54,7 +55,7 @@ docker compose run --rm fnactor --actor '三上悠亚' --overwrite --apply
 | `--root DIR` | 可选地从该目录只读扫描 NFO，按其中演员名筛选任务 |
 | `--cache DIR` | 缓存目录，默认 `/config` |
 | `--limit N` | 限制本次演员数；0 表示不限 |
-| `--concurrency N` | 演员处理并发数，默认 1，最高 3 |
+| `--concurrency N` | 演员处理并发数，默认 1，最高 2 |
 | `--refresh` | 忽略来源缓存并重新刮削 |
 | `--apply` | 实际保存到飞牛影视；缺省只预览 |
 | `--overwrite` | 覆盖本地演员档案中已有且未锁定的字段，必须搭配 `--apply` |
@@ -63,7 +64,11 @@ docker compose run --rm fnactor --actor '三上悠亚' --overwrite --apply
 
 ## 批量速度与来源限流
 
-默认只处理一个演员。在线资料及头像请求由全局队列串行发送，默认间隔至少 2 秒，遇到 429/常见 5xx 或网络错误会有限重试并遵守 `Retry-After`。`--concurrency 2` 或 `3` 只并行演员处理，不会绕过上游队列。可通过 `UPSTREAM_DELAY_MS` 设置 500–60000 毫秒的请求间隔；建议保持默认值，遇到 429/403 时暂停任务并提高间隔。
+默认只处理一个演员。在线来源按顺序查询；在线资料及头像请求由全局队列串行发送，默认间隔至少 2 秒，遇到 429/常见 5xx 或网络错误会有限重试并遵守 `Retry-After`。最高 `--concurrency 2`，不会绕过上游队列。可通过 `UPSTREAM_DELAY_MS` 设置 500–60000 毫秒的请求间隔；建议保持默认值，遇到 429/403 时暂停任务并提高间隔。
+
+## 内存上限
+
+Compose 将容器内存限制为 768 MiB。上游 HTTP 响应体默认限制为 16 MiB，头像原图限制为 10 MiB、1600 万像素，处理后图片限制为 4 MiB。Gfriends 文件树在同一进程内共享解析结果；sharp 的原生缓存限制为 32 MiB、并行线程为 1。结合默认单演员并发，避免多个大图片同时解码造成不可预测的内存峰值。可用 `docker stats fnactor` 查看任务期间的容器内存。
 
 演员资料缓存位于 `/config/actors`。缓存命中时不会重新请求资料来源；`--refresh` 会强制重新查询，建议谨慎用于全库批量任务。
 

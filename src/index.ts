@@ -26,7 +26,7 @@ const help = `fnactor — 补全飞牛影视中的本地演员档案
   --db FILE        飞牛影视数据库路径（默认 FNOS_DB_PATH 或 /fnos-db/trimmedia.db）
   --cache DIR      缓存目录（默认 CACHE_DIR 或 /config）
   --limit N        最多处理 N 个演员，0 表示不限制
-  --concurrency N  同时处理的演员数，默认 1，最大 3
+  --concurrency N  同时处理的演员数，默认 1，最大 2
   --apply          将缺少的头像/简介写入飞牛影视本地演员档案
   --overwrite      覆盖已有头像/简介（仍跳过飞牛官方资料及锁定字段）
   --refresh        忽略演员资料缓存并重新查询来源
@@ -50,7 +50,7 @@ function optionsFromArgs(args: string[]): Options {
       else if (arg === "--db") options.database = value;
       else if (arg === "--cache") options.cache = value;
       else if (arg === "--limit") { options.limit = Number(value); if (!Number.isInteger(options.limit) || options.limit < 0) throw new Error("--limit 必须是非负整数"); }
-      else { options.concurrency = Number(value); if (!Number.isInteger(options.concurrency) || options.concurrency < 1 || options.concurrency > 3) throw new Error("--concurrency 必须在 1 到 3 之间"); }
+      else { options.concurrency = Number(value); if (!Number.isInteger(options.concurrency) || options.concurrency < 1 || options.concurrency > 2) throw new Error("--concurrency 必须在 1 到 2 之间"); }
     } else throw new Error(`未知参数：${arg}\n\n${help}`);
   }
   if (options.overwrite && !options.apply) throw new Error("--overwrite 需要同时指定 --apply");
@@ -101,11 +101,18 @@ async function scrapedProfile(name: string, cacheDir: string, refresh: boolean):
       if (cached) return cached;
     } catch { /* no valid cache */ }
   }
-  const outcomes = await Promise.allSettled([
-    scrapeGfriends(name, cacheDir, refresh),
-    scrapeMinnano(name),
-    scrapeWikipedia(name),
-  ]);
+  // Query providers in sequence: each may hold parsed pages or image metadata
+  // in memory. Per-actor concurrency is separately capped by the CLI.
+  const providers = [
+    { name: "Gfriends", run: () => scrapeGfriends(name, cacheDir, refresh) },
+    { name: "Minnano-AV", run: () => scrapeMinnano(name) },
+    { name: "Wikipedia", run: () => scrapeWikipedia(name) },
+  ];
+  const outcomes: PromiseSettledResult<ActorProfile | undefined>[] = [];
+  for (const provider of providers) {
+    try { outcomes.push({ status: "fulfilled", value: await provider.run() }); }
+    catch (reason) { outcomes.push({ status: "rejected", reason }); }
+  }
   const profiles = outcomes.flatMap((result, index) => {
     if (result.status === "fulfilled" && result.value) return [result.value];
     if (result.status === "rejected") console.warn(`${name} 的来源 ${["Gfriends", "Minnano-AV", "Wikipedia"][index]} 查询失败：${String(result.reason)}`);
