@@ -55,7 +55,7 @@ ghcr.io/biaobiaobiao108/fnos-actor-scraper:latest
    | `FNOS_URL` | 是 | 飞牛影视 API 地址。使用 `network_mode: host` 时通常设为 `http://127.0.0.1:5666`，即 NAS 本机回环地址。 |
    | `FNOS_USERNAME` | 使用账号密码时必填 | 有权限编辑飞牛影视演员资料的飞牛账号。 |
    | `FNOS_PASSWORD` | 使用账号密码时必填 | 上述账号密码。只保存在 NAS 的 `.env` 中。 |
-   | `FNOS_TOKEN` | 可选 | 当前有效的飞牛 API token。配置后优先使用；过期或无效时应删除并改用账号密码。 |
+   | `FNOS_TOKEN` | 可选 | 当前有效的飞牛 API 会话 token。通常无需手动获取：程序用账号密码登录并自动取得 token；设置此项时程序优先使用它，过期后删除并改用账号密码。 |
    | `UPSTREAM_DELAY_MS` | 否 | 公网上游请求最小间隔，默认 `2000` 毫秒。遇到 403/429 时调大，避免频繁请求。 |
    | `GOMEMLIMIT` | 否 | Go 运行时内存目标，默认 `640MiB`；Compose 容器硬限制是 `768m`。 |
    | `GOGC` | 否 | Go 垃圾回收目标，默认 `75`。一般保持默认即可。 |

@@ -31,6 +31,16 @@ type apiEnvelope struct {
 	Data    json.RawMessage `json:"data"`
 }
 
+type fnosAPIError struct {
+	path       string
+	message    string
+	statusCode int
+}
+
+func (err *fnosAPIError) Error() string {
+	return fmt.Sprintf("FnOS API %s：%s (%d)", err.path, err.message, err.statusCode)
+}
+
 func (client *FnOSClient) request(ctx context.Context, path string, method string, body io.Reader, contentType string, destination any) error {
 	request, err := http.NewRequestWithContext(ctx, method, client.base+path, body)
 	if err != nil {
@@ -67,7 +77,7 @@ func (client *FnOSClient) request(ctx context.Context, path string, method strin
 		if message == "" {
 			message = response.Status
 		}
-		return fmt.Errorf("FnOS API %s：%s (%d)", path, message, response.StatusCode)
+		return &fnosAPIError{path: path, message: message, statusCode: response.StatusCode}
 	}
 	payload := data
 	if len(envelope.Data) > 0 && string(envelope.Data) != "null" {
@@ -93,7 +103,14 @@ func (client *FnOSClient) Login(ctx context.Context) error {
 	var result struct {
 		Token string `json:"token"`
 	}
-	if err := client.request(ctx, "/user/loginByPassword?channel=v2", http.MethodPost, bytes.NewReader(body), "application/json", &result); err != nil {
+	err := client.request(ctx, "/user/loginByPassword?channel=v2", http.MethodPost, bytes.NewReader(body), "application/json", &result)
+	if apiErr, ok := err.(*fnosAPIError); ok && strings.EqualFold(apiErr.message, "Invalid Params") {
+		// Some FnOS versions still expose only the legacy login endpoint. The web UI
+		// uses this same endpoint with the original password when v2 is unavailable.
+		legacyBody, _ := json.Marshal(map[string]string{"username": client.username, "password": client.password, "app_name": "trimemedia-web"})
+		err = client.request(ctx, "/login", http.MethodPost, bytes.NewReader(legacyBody), "application/json", &result)
+	}
+	if err != nil {
 		return err
 	}
 	if result.Token == "" {
