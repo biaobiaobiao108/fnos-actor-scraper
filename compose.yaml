@@ -1,0 +1,13 @@
+services:
+  fnos-actor-scraper:
+    image: ghcr.io/biaobiaobiao108/fnos-actor-scraper:latest
+    build: .
+    container_name: fnos-actor-scraper
+    network_mode: host
+    environment:
+      MEDIA_ROOT: /media
+      CACHE_DIR: /config
+    volumes:
+      - /mnt/CloudNAS/115open:/media:ro
+      - /mnt/docker_disk/fnos-actor-scraper:/config
+    profiles: ["manual"]

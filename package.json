@@ -1,0 +1,19 @@
+{
+  "name": "fnos-actor-scraper",
+  "version": "0.1.0",
+  "description": "TypeScript + Bun CLI to enrich FnOS actor NFO metadata",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun src/index.ts",
+    "build": "bun build src/index.ts --target=bun --outdir dist"
+  },
+  "dependencies": {
+    "@xmldom/xmldom": "^0.8.10",
+    "cheerio": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.9.3"
+  }
+}
