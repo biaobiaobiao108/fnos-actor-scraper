@@ -1,6 +1,15 @@
 .git
 node_modules
 dist
+src
+bin
+package.json
+bun.lock
+tsconfig.json
+.env
+.env.*
+!.env.example
+*.log
 docs
 README.md
 compose.yaml

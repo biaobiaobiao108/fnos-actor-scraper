@@ -1,65 +1,64 @@
-# fnactor 项目协作说明
+# fnactor 项目协作规范
 
 ## 项目用途
 
-`fnactor` 是一个用 TypeScript 和 Bun 编写的命令行程序，以 Docker 一次性运行在飞牛 OS 上。它批量查找飞牛影视中的本地演员档案，从 Gfriends、Minnano-AV、Wikipedia 查询头像和简介，再更新飞牛影视中央演员档案。
+`fnactor` 是一个 Go 命令行程序，以 Docker 单次任务运行在飞牛 OS 上。它为飞牛影视中的本地演员中央档案查询头像与简介，并在用户显式确认后通过飞牛影视 API 更新档案。
 
-演员档案是集中维护的 person 记录，不是每部影片各自维护的演员 NFO。程序默认从飞牛影视 SQLite 数据库的 `person` 表只读枚举本地演员；头像与简介通过飞牛影视 Web API 写回。默认无需挂载电影/剧集目录。
+飞牛影视演员资料位于中央 person 记录中，不是每个演员一个 NFO 文件。默认通过只读的 SQLite 数据库读取本地演员清单；无需挂载媒体目录。头像与简介通过飞牛影视 API 写入。
 
-## 架构与文件职责
+## 技术架构
 
-- `src/index.ts`：CLI、任务来源选择、演员档案保护和跳过规则、来源调度、缓存、预览与写入。
-- `src/fnos-db.ts`：使用 Bun 内置 SQLite，以只读模式从 `person` 表读取本地演员列表。只读数据库，绝不通过 SQL 写入。
-- `src/fnos.ts`：飞牛影视登录、person 搜索、编辑详情、头像上传及演员资料保存 API。
-- `src/nfo.ts`：可选的只读 NFO 演员名扫描器，仅供用户通过 `--root` 指定目录时使用；不允许新增 NFO 写入功能。
-- `src/providers/`：Gfriends、Minnano-AV、Wikipedia 在线资料来源。
-- `src/image.ts`：验证公网 HTTPS 图片地址，将头像处理为 640×960 JPEG 后交给飞牛上传。
-- `src/util.ts`：名称归一化、字符串工具、上游串行限速及重试。
-- `/config/actors`：在线演员资料缓存。缓存可删除重建，不等同于飞牛已保存的演员头像。
-- `Dockerfile`：`oven/bun:alpine` 多阶段镜像；运行时包含 Bun 和 sharp 生产依赖，入口命令为 `fnactor`。
-- `compose.yaml`：飞牛 NAS 的手动运行配置；数据库只读挂载到 `/fnos-db`，缓存持久化到 `/vol1/docker/fnactor-cache`。
-- `.github/workflows/publish-image.yml`：推送 `main` 或版本标签时，构建并发布 amd64/arm64 GHCR 镜像。
-- `README.md`、`docs/ARCHITECTURE.md`、`docs/INTERFACES.md`：用户部署、使用、API 与实现说明；改行为时须一并维护。
+- Go CLI，一次运行一个任务，处理结束后退出。
+- 标准库 `net/http` 负责 HTTP，`encoding/json` 与 `encoding/xml` 负责结构化数据。
+- `goquery` 解析 HTML 来源。
+- `modernc.org/sqlite` 只读访问飞牛影视 SQLite `person` 表；使用纯 Go SQLite 实现，不直接写数据库。
+- `golang.org/x/image/webp` 和标准库 `image/jpeg` 相关解码能力处理头像；转换为 640×960 JPEG，再经飞牛 API 上传。
+- 在线来源适配器负责 Gfriends、Minnano-AV、Wikipedia 中文/日文；缓存写入 `/config/actors`。
+- 飞牛 API 登录、搜索、读取编辑详情、上传头像和保存档案由 FnOS 客户端模块负责。
 
-## 关键数据规则
+实现 Go 迁移时建议按职责拆分 CLI/调度、FnOS API、只读数据库、NFO 扫描、来源适配器、图片转换、上游限流与缓存模块。模块可按 Go 包结构调整；文档和部署参数也要同步。
 
-- FnOS 当前没有每个演员独立的 NFO 目录。飞牛影视把演员资料存为数据库 person 记录，图片以哈希路径保存在应用管理的图片目录中。
-- 默认批量输入是 FnOS person 表内的本地演员；`--actor` 用于指定单个演员；`--root` 是可选的 NFO 名称来源，不应再作为默认必需挂载。
-- 只把 `trim_id` 以 `LOCAL_PERSON_` 开头、无 TMDb/IMDb ID 且非官方的记录视为可更新候选；处理前仍须通过 API 读取编辑详情并再次检查保护标志。
-- 不创建 person 记录、不猜测重名。只对唯一精确匹配的演员操作。
-- 默认只补缺少的简介/头像；完整资料重复运行时跳过。`--overwrite --apply` 可覆盖本地资料，但不得覆盖官方资料或字段锁定内容。
-- 缺省为预览模式。只有显式 `--apply` 才调用 API 保存数据。
-- 列举演员时，数据库挂载必须只读；修改演员、头像必须经飞牛 API。不要直接改数据库、WAL、SHM 或哈希图片文件。
-- 不要在用户 NAS 上执行真实写入，除非用户明确要求本次写入操作。
+## 数据边界与候选筛选
 
-## 飞牛路径与部署事实
+- 默认从当前飞牛影视数据库的 `person` 表读取候选；只接纳 `trim_id` 以 `LOCAL_PERSON_` 开头、无 TMDb/IMDb 标识的本地人物记录。
+- 数据库以只读模式打开。数据库挂载需只读，且包括同目录 SQLite WAL/SHM 文件；不得执行 SQL 写入，不得改动 DB、WAL 或 SHM。
+- 写入前通过飞牛 API 重新读取编辑详情，验证目标仍是本地档案、非官方人物，并检查字段锁定状态。
+- 默认只补缺失头像和简介；已齐全时跳过。`--overwrite --apply` 仅允许覆盖本地且未锁定的资料字段。
+- 远程来源属于飞牛官方或已有在线身份标识的档案应跳过，不能通过 `--overwrite` 绕过保护。
+- 不创建演员记录，不猜测重名。只对唯一精确匹配目标执行更新。
+- 缺省为预览。只有显式 `--apply` 才允许调用上传与保存 API。
+- `--actor` 可直接指定一个演员，不依赖数据库。`--root` 是可选的只读 NFO 名称筛选输入，不是演员数据存放路径。
 
-已于 2026-10-05 只读检查用户的 `flymoo`（系统主机名 `OecT`）：
+## 请求、限流与内存
 
-- FnOS Media 数据库目录：`/usr/local/apps/@appdata/trim.media/database`；主库为 `trimmedia.db`，当时同时有 `trimmedia.db-wal` 和 `trimmedia.db-shm`。容器应把整个数据库目录只读挂载到 `/fnos-db`，不可只挂单个数据库文件。
-- 应用图片元数据位于 `/vol1/@appmeta/trim.media/img` 的哈希子目录；程序不挂载此目录，头像通过 API 上传。
-- 影视根目录 `/vol1/video/movies` 不存在。当前媒体库目录在 `/vol02/...`、`/vol00/...` 等位置；默认程序无需挂载它们。
-- `/vol00`、`/vol02` 下的动态卷名仅适用于当前 NAS，不能作为通用安装假设。
-- 旧 iStoreOS 路径 `/mnt/docker_disk` 不适用于飞牛 NAS；当前 Compose 使用 `/vol1/docker/fnactor-cache` 作为缓存目录。
+- 所有公开资料页面和头像下载统一走上游 HTTP 客户端与全局队列。默认串行请求，最小间隔 2000 毫秒；配置 `UPSTREAM_DELAY_MS` 时需限制在安全合理范围。
+- 默认演员并发为 1，最高为 2。来源查询按顺序执行；提高演员并发不得绕开上游全局队列。
+- 上游响应体最大 16 MiB；超过上限应中止读取并报告来源响应过大，不能先完整载入再检查。
+- 单张头像下载最大 10 MiB，像素上限 16,000,000，输出 JPEG 最大 4 MiB。应在解码前检查内容长度/流量上限与像素数，并对空图、损坏文件和不支持格式安全报错。
+- 避免同时保留多个大响应体、原始头像和解码后像素缓冲。来源请求按顺序执行，Gfriends 文件树等大型索引应在一次进程中共享加载和解析结果。
+- `GOMEMLIMIT=640MiB` 为 Go 运行时内存目标；容器 cgroup `mem_limit=768m` 为进程硬限制。新增缓存必须有容量/生命周期边界，不能假定 GOMEMLIMIT 是硬性保护。
+- 代理只用于公网来源；飞牛 API 通过 host 网络访问 `http://127.0.0.1:5666`，配置 `NO_PROXY` 确保回环请求不走代理。
+- 收到 429/403 时不得用高并发或无限重试继续请求。对临时网络错误和常见 5xx 采用有限重试并尊重 `Retry-After`。
 
-数据库 schema 和私有 Web API 都属于 FnOS 内部实现，可能随系统升级变化。数据库只读查询必须验证 `person` 表需要的列；schema 不符时给出错误，不能尝试写库或猜字段。API 改动需查验飞牛前端实现，文档注明内部 API 的兼容限制。
+## 凭据和日志
 
-## 上游限流
+- 不在日志中输出密码、token、Authorization header、代理用户名/密码或完整代理 URL。
+- `.env` 只供本地或 NAS 部署，必须在 `.gitignore` 中排除；只提交不含真实凭据的 `.env.example`。
+- 不关闭 TLS 校验。HTTP 仅用于 NAS 本机 API 回环；公网资料请求使用 HTTPS。
+- 不能将用户的 NAS 凭据或代理凭据写入源码、文档示例、镜像层或 Git 历史。
 
-- 所有公开资料来源和头像下载都必须使用 `src/util.ts` 的 `fetchUpstream`；不允许 provider 绕过限速直接调用 `fetch()`。
-- 全局队列串行下载响应体，默认请求间隔 2000 毫秒。`UPSTREAM_DELAY_MS` 被限制在 500–60000 毫秒。
-- 对 429、常见 5xx 和网络失败进行有限退避，尽量遵守 `Retry-After`。收到 403/429 时不要增加激进重试；建议停止批量任务并调高间隔。
-- 演员并发默认 1，最大 2；一个演员的多个来源依次请求。不能让提高演员并发绕过上游队列。
-- 上游响应默认限制为 16 MiB；头像原图不超过 10 MiB/1600 万像素，输出不超过 4 MiB。sharp 缓存限制 32 MiB、内部并发 1；调整这些限制时同步维护中文文档。
-- Compose 容器内存 cgroup 上限为 768 MiB；调高需结合 NAS `docker stats` 的实际峰值。
-- 当前 Compose 使用 host 网络，FnOS API 优先通过 NAS loopback `http://127.0.0.1:5666` 连接；不得全局关闭 TLS 校验。
-- 登录口令、令牌、Authorization header 不得写入日志或提交。
+## NAS 部署事实与兼容性
 
-## 开发与交付规范
+当前用户 NAS `flymoo` 曾核实的飞牛影视数据库目录为 `/usr/local/apps/@appdata/trim.media/database`，主库为 `trimmedia.db`，应整体只读挂载至 `/fnos-db`。路径是 FnOS 内部实现，其他设备或系统更新后可能变化。应用图片目录由飞牛管理，程序无需挂载。
 
-- JavaScript / TypeScript 使用 Bun 管理和运行：`bun install --frozen-lockfile`、`bunx tsc --noEmit`、`bun run build`、`bun run fnactor -- --help`。
-- 当前没有自动化测试套件。除非用户要求测试，不要新增或运行测试；类型检查、构建与 CLI 帮助可用于验证。
-- Compose 默认 `manual` profile，程序不是常驻服务。镜像为 `ghcr.io/biaobiaobiao108/fnos-actor-scraper:latest`。
-- `.env` 包含飞牛登录凭据，必须保持 Git 忽略；只提交 `.env.example`。
-- 每次完成一轮代码修改后，创建一条中文 Git 提交；提交信息用中文准确概括改动。只有任务要求发布远端或沿用已授权发布流程时才推送。
-- 默认使用中文沟通，并确保所有面向用户的文档使用中文。
+用户 NAS 上 `/vol1/video/movies` 不存在。默认也不需要任何媒体目录；若 `--root` 扫描 NFO，挂载用户实际存在且含 NFO 的路径即可。
+
+FnOS 的 SQLite schema 与 `/v/api/v1` Web API 都不是稳定公开接口。运行时应验证所需数据库列和 API 响应；不兼容时清楚报错并停止，不能猜测字段或改用直接 SQL 写入兜底。
+
+## 文档、开发和提交
+
+- 所有面向用户的说明使用中文。CLI 参数、环境变量、文件名、接口名保留代码中的原始拼写。
+- Go 依赖通过 Go Modules 管理。提交 `go.mod` 和 `go.sum`，不提交 vendored 临时依赖或构建产物。
+- 完成功能或修复后，按项目当前要求运行适用的格式化、静态检查、构建和用户要求的验证；不声称未运行的检查已通过。
+- 每次完成一轮代码修改后创建一条中文 Git 提交，提交信息准确概括该轮改动。仅在用户要求推送或已有明确授权的发布流程中推送。
+- 修改运行行为、CLI、部署参数、保护规则或数据边界时，同步更新 `README.md`、`docs/ARCHITECTURE.md`、`docs/INTERFACES.md`。

@@ -1,92 +1,101 @@
 # fnactor
 
-`fnactor` 是运行在飞牛 OS Docker 中的批量演员资料刮削工具。它为飞牛影视中的本地演员档案查找头像和简介，并将资料写回飞牛影视的中央演员档案。
+`fnactor` 是一个使用 Go 编写、运行在飞牛 OS Docker 上的命令行工具，用于批量为飞牛影视中的本地演员中央档案补充头像和简介。
 
-飞牛影视的演员不是独立 NFO 文件：演员资料保存在应用数据库的 `person` 表中，头像文件由飞牛影视放在应用管理的哈希图片目录。一个演员被多部影片引用时，共用同一条中央档案。
+飞牛影视的演员资料集中保存在应用数据库的 `person` 表中，不是每部影片各自维护的演员 NFO。多部影片引用同一演员时，更新的是共享的中央档案。
 
-## 处理规则
+## 功能与保护规则
 
-- 默认从飞牛影视数据库只读读取本地演员名单；无需挂载电影、剧集或 `No.1Style` 媒体目录。
-- 数据库只用于列举演员。程序通过飞牛影视 API 保存头像与简介，不直接写数据库、WAL/SHM 文件或图片目录。
-- 仅处理本地档案；带 TMDb/IMDb 标识或飞牛官方标记的在线资料会跳过。
-- 默认只补缺失头像和简介，资料齐全时重复运行会跳过。`--overwrite` 仅覆盖本地档案中未锁定的字段。
-- 默认预览；实际写入必须显式传 `--apply`。不创建演员档案，重名或找不到目标时跳过。
+- 默认以只读方式从飞牛影视数据库枚举本地演员；无需挂载电影或剧集目录。
+- 数据库只用于读取候选名单。简介和头像只能通过飞牛影视 API 保存，程序不直接修改数据库、WAL/SHM 或飞牛管理的图片目录。
+- 仅处理本地人物档案；飞牛官方档案、已有 TMDb/IMDb 标识的在线档案会跳过。
+- 默认只补缺少的简介和头像。资料已齐全时跳过；`--overwrite` 只允许覆盖本地档案中未锁定的字段。
+- 默认是预览模式。只有显式传入 `--apply` 才会写入飞牛影视。不会创建人物，也不会猜测处理重名。
+- 支持 `--actor` 指定单人，也支持通过 `--root` 只读扫描 NFO 并按其中演员名筛选。
 
 ## 部署
 
-镜像：
+镜像地址：
 
 ```text
 ghcr.io/biaobiaobiao108/fnos-actor-scraper:latest
 ```
 
-复制 `.env.example` 为 `.env`，填写飞牛登录用户名/密码（或当前有效的 `FNOS_TOKEN`）。Compose 使用 host 网络，建议 `FNOS_URL=http://127.0.0.1:5666`，让容器经 NAS 本机回环地址访问飞牛 API，避开自签名证书和公网代理。密码以明文保存在 `.env`，请限制文件权限并勿提交到 Git。
-如果访问公网来源需要代理，可在 `.env` 中设置 `http_proxy` 与 `https_proxy`；Compose 会同时传入大小写两种环境变量。`no_proxy` 默认包含 NAS 地址，保证飞牛 API 连接直达 NAS。
+复制 `.env.example` 为 `.env`，填写飞牛登录信息或有效的 `FNOS_TOKEN`。在 NAS 上建议使用 host 网络并将 `FNOS_URL` 设为 `http://127.0.0.1:5666`，以便直接访问本机飞牛 API。公网来源可以通过 `http_proxy`、`https_proxy` 配置代理；确保 `NO_PROXY` 包含 `127.0.0.1,localhost`，避免飞牛 API 请求经过公网代理。大小写代理变量均可配置。
 
-默认 Compose 会挂载以下目录：
+`.env` 内的口令和令牌是敏感信息，应限制文件权限并确保不提交到 Git。
 
-- `/usr/local/apps/@appdata/trim.media/database` → `/fnos-db`，只读，包含 `trimmedia.db` 及 SQLite WAL/SHM 文件。它是当前在用户 NAS `flymoo` 上核实的 FnOS Media 数据库位置。
-- `/vol1/docker/fnactor-cache` → `/config`，可写，用于持久化在线资料缓存。
+默认批量模式需要将飞牛影视数据库目录整体只读挂载到 `/fnos-db`，因为 SQLite 可能需要同目录中的 WAL/SHM 文件：
 
-Compose 不挂载影视库或飞牛私有图片目录。`/vol1/video/movies` 在用户的 NAS 上不存在。数据库路径是 FnOS 内部实现，升级或迁移后可能变化；部署前请通过飞牛应用配置确认。不要用数据库 bind mount 代替飞牛 API 写入。
+```text
+/usr/local/apps/@appdata/trim.media/database:/fnos-db:ro
+```
 
-容器使用 host 网络访问飞牛 Web API，按需运行而非常驻服务。Compose 用 `manual` profile，需手动启动，不会随开机自动刮削。
+该目录是当前用户 NAS 上核实的位置，其他安装或系统升级后可能不同。缓存目录 `/config` 可写并建议持久化。无需挂载飞牛私有图片目录或整个影视库；只有使用 `--root` 时才需要将包含 NFO 的实际媒体目录只读挂载进容器。用户 NAS 上的 `/vol1/video/movies` 不存在，请以飞牛媒体库设置中的实际路径为准。
+
+这是按需运行的 CLI 任务，不是常驻服务。部署后建议先执行预览，再对少量演员执行 `--apply`。
 
 ## 使用
 
 ```sh
-# 默认批量模式：枚举飞牛影视中的本地演员，先预览前 20 人
+# 默认批量模式：枚举本地演员，预览前 20 人
 docker compose run --rm fnactor --limit 20
 
-# 确认预览结果后，补全前 20 人的缺失资料
+# 确认后补全前 20 人的缺失资料
 docker compose run --rm fnactor --limit 20 --apply
 
-# 单人预览，不需要挂载数据库
+# 单人预览
 docker compose run --rm fnactor --actor '三上悠亚'
 
-# 显式覆盖本地档案的已有头像/简介
+# 在线来源和头像处理诊断，不要求飞牛账号，也不会修改资料
+docker compose run --rm fnactor --actor '三上悠亚' --probe
+
+# 显式覆盖已有的、未锁定的本地资料
 docker compose run --rm fnactor --actor '三上悠亚' --overwrite --apply
 ```
 
 | 参数 | 说明 |
 | --- | --- |
 | `--actor NAME` | 只处理指定演员 |
-| `--db FILE` | FnOS 数据库文件，默认 `FNOS_DB_PATH` 或 `/fnos-db/trimmedia.db` |
-| `--root DIR` | 可选地从该目录只读扫描 NFO，按其中演员名筛选任务 |
-| `--cache DIR` | 缓存目录，默认 `/config` |
-| `--limit N` | 限制本次演员数；0 表示不限 |
-| `--concurrency N` | 演员处理并发数，默认 1，最高 2 |
-| `--refresh` | 忽略来源缓存并重新刮削 |
-| `--apply` | 实际保存到飞牛影视；缺省只预览 |
-| `--overwrite` | 覆盖本地演员档案中已有且未锁定的字段，必须搭配 `--apply` |
+| `--db FILE` | 飞牛影视数据库文件；默认取 `FNOS_DB_PATH` 或 `/fnos-db/trimmedia.db` |
+| `--root DIR` | 可选地只读扫描目录中的 NFO，并按演员名筛选任务 |
+| `--cache DIR` | 在线资料缓存目录；默认取 `CACHE_DIR` 或 `/config` |
+| `--limit N` | 本次最多处理人数；`0` 表示不限 |
+| `--concurrency N` | 演员任务并发数；默认 1，最高 2 |
+| `--refresh` | 忽略在线资料缓存并重新查询来源 |
+| `--probe` | 仅实测来源抓取和头像处理，不登录或写入飞牛；需要 `--actor` |
+| `--apply` | 实际通过飞牛 API 保存资料；缺省仅预览 |
+| `--overwrite` | 覆盖本地档案中已有且未锁定的字段；必须搭配 `--apply` |
+| `--help` | 显示命令帮助 |
 
-如需用 `--root` 选择媒体库中的演员，需要额外把**实际含 NFO 的媒体路径**只读挂到容器目录（例如 `/media`），再运行 `--root /media`。用户 NAS 上已核实的一个媒体库路径为 `/vol02/1000-1-17f2bfff/整理好的学习资料/No.1Style/`；它只是可选的 NFO 名称来源，不是飞牛演员资料路径。该卷标识可能变化，实际路径以飞牛媒体库设置为准。
+## 限流与内存
 
-## 批量速度与来源限流
+程序按顺序访问在线资料来源，并让所有公网来源请求和头像下载共用串行队列，默认请求间隔至少 2 秒。演员任务并发默认为 1，最高为 2。上游响应体限制为 16 MiB；头像下载限制为 10 MiB、1600 万像素，处理后的 JPEG 限制为 4 MiB。
 
-默认只处理一个演员。在线来源按顺序查询；在线资料及头像请求由全局队列串行发送，默认间隔至少 2 秒，遇到 429/常见 5xx 或网络错误会有限重试并遵守 `Retry-After`。最高 `--concurrency 2`，不会绕过上游队列。可通过 `UPSTREAM_DELAY_MS` 设置 500–60000 毫秒的请求间隔；建议保持默认值，遇到 429/403 时暂停任务并提高间隔。
+容器建议配置 `mem_limit: 768m`，Go 运行时使用 `GOMEMLIMIT=640MiB`。Go 运行时内存软上限不等于进程的绝对硬限制；容器 cgroup 限制仍是最终边界。可通过 `docker stats fnactor` 观察真实任务峰值。缓存应按演员逐项保存和复用，避免反复加载大型来源数据；头像按单张下载、校验、解码和转换，避免并行保留多张原图与解码像素缓冲。
 
-## 内存上限
+遇到 403/429 时应暂停批量任务，不要提高并发或增加激进重试。可将 `UPSTREAM_DELAY_MS` 调高后再继续。
 
-Compose 将容器内存限制为 768 MiB。上游 HTTP 响应体默认限制为 16 MiB，头像原图限制为 10 MiB、1600 万像素，处理后图片限制为 4 MiB。Gfriends 文件树在同一进程内共享解析结果；sharp 的原生缓存限制为 32 MiB、并行线程为 1。结合默认单演员并发，避免多个大图片同时解码造成不可预测的内存峰值。可用 `docker stats fnactor` 查看任务期间的容器内存。
+## 实现概览
 
-演员资料缓存位于 `/config/actors`。缓存命中时不会重新请求资料来源；`--refresh` 会强制重新查询，建议谨慎用于全库批量任务。
+- Go CLI 单次运行，结束后退出。
+- 使用标准库 `net/http`、`encoding/json`、`encoding/xml`，以 `goquery` 解析来源 HTML。
+- 使用 `modernc.org/sqlite` 只读访问飞牛影视 `person` 表。
+- 使用 `golang.org/x/image/webp` 和标准库 JPEG 解码器处理头像，转换为 640×960 JPEG 后经飞牛 API 上传。
+- 在线来源包括 Gfriends、Minnano-AV 和 Wikipedia 中文/日文；缓存存放在 `/config`。
+- 飞牛 API 是其 Web 前端使用的内部接口，飞牛版本升级时可能变化。
 
-## 在线来源与实现
-
-在线来源包括 Gfriends、Minnano-AV 和 Wikipedia 中文/日文。头像处理成 640×960 JPEG，再经飞牛 API 上传。当前飞牛演员编辑接口是 Web 前端使用的内部 API，可能随 FnOS 更新而变化。
-
-更多部署、接口和兼容说明见 [接口与使用说明](docs/INTERFACES.md) 与 [实现与架构](docs/ARCHITECTURE.md)。项目协作规则见 [AGENTS.md](AGENTS.md)。
+详细架构、接口、部署配置与故障排查见[实现与架构](docs/ARCHITECTURE.md)和[接口与使用说明](docs/INTERFACES.md)。项目协作规范见 [AGENTS.md](AGENTS.md)。
 
 ## 本地开发
 
-需要 Bun：
+需要 Go 工具链。常用开发命令：
 
 ```sh
-bun install --frozen-lockfile
-bunx tsc --noEmit
-bun run build
-bun run fnactor -- --help
+go mod download
+go build ./...
+go vet ./...
+go run . --help
 ```
 
-GitHub Actions 在 main push、版本标签或手动触发时构建 `linux/amd64`、`linux/arm64` 镜像并发布到 GHCR。镜像以 `oven/bun:alpine` 为基础。
+不要在提交内容中包含 `.env`、登录口令、token 或代理凭据。GitHub Actions 负责构建并发布多架构容器镜像。

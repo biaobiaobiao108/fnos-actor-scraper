@@ -1,17 +1,17 @@
-FROM oven/bun:alpine AS build
-WORKDIR /app
-COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile
-COPY src ./src
-RUN bun build src/index.ts --target=bun --external sharp --outfile=/tmp/dist/index.js
+FROM golang:alpine AS build
+WORKDIR /src
+RUN apk add --no-cache ca-certificates
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/fnactor .
 
-FROM oven/bun:alpine AS runtime
+FROM alpine:latest
+RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
-COPY package.json bun.lock ./
-RUN bun install --production --frozen-lockfile
-COPY --from=build /tmp/dist/index.js ./index.js
-COPY bin/fnactor ./bin/fnactor
-RUN chmod +x ./bin/fnactor
-ENV MEDIA_ROOT=/media
-ENV CACHE_DIR=/config
-ENTRYPOINT ["/app/bin/fnactor"]
+COPY --from=build /out/fnactor /usr/local/bin/fnactor
+ENV CACHE_DIR=/config \
+    FNOS_DB_PATH=/fnos-db/trimmedia.db \
+    GOMEMLIMIT=640MiB \
+    GOGC=75
+ENTRYPOINT ["fnactor"]
