@@ -10,10 +10,10 @@
 
 - Go CLI，一次运行一个任务，处理结束后退出。Docker 镜像默认无参数启动时必须显示用法并保持空闲，用户显式输入 `fnactor ...` 才能开始任务。
 - 标准库 `net/http` 负责 HTTP，`encoding/json` 与 `encoding/xml` 负责结构化数据。
-- `goquery` 解析 HTML 来源。
+- 标准库 JSON/XML 解码结构化来源。
 - `modernc.org/sqlite` 只读访问飞牛影视 SQLite `person` 表；使用纯 Go SQLite 实现，不直接写数据库。
 - `golang.org/x/image/webp` 和标准库 `image/jpeg` 相关解码能力处理头像；转换为 640×960 JPEG，再经飞牛 API 上传。
-- 在线来源适配器负责 Gfriends、Minnano-AV、Wikipedia、Wikidata；缓存写入 `/config/actors`。
+- 在线来源适配器负责 Gfriends、Wikipedia、Wikidata；缓存写入 `/config/actors`。
 - 飞牛 API 登录、搜索、读取编辑详情、上传头像和保存档案由 FnOS 客户端模块负责。
 - `/image/temp/upload` 使用 multipart 字段 `file` 与 `image_type=poster`，并按当前飞牛前端规则生成 `authx` 签名；不要漏传图片类型。
 
@@ -34,7 +34,7 @@
 
 - 所有公开资料页面和头像下载统一走上游 HTTP 客户端与全局队列。默认串行请求，最小间隔 2000 毫秒；配置 `UPSTREAM_DELAY_MS` 时需限制在安全合理范围。
 - 默认演员并发为 1，最高为 2。来源查询按顺序执行；提高演员并发不得绕开上游全局队列。
-- 数据库批处理忽略纯数字演员名称：上游按姓名查询，数字 ID 不可作为演员名使用。Minnano-AV 在一次运行内首次返回 HTTP 403 后应停用该来源并继续尝试其他来源，避免对已拒绝的站点重复请求。
+- 数据库批处理忽略纯数字演员名称：上游按姓名查询，数字 ID 不可作为演员名使用。头像按 Gfriends、Wikipedia、Wikidata 的顺序取第一个可用图片；简介按 Wikipedia、Wikidata 的顺序取第一个非空结果。
 - 上游响应体最大 16 MiB；超过上限应中止读取并报告来源响应过大，不能先完整载入再检查。
 - 单张头像下载最大 10 MiB，像素上限 16,000,000，输出 JPEG 最大 4 MiB。应在解码前检查内容长度/流量上限与像素数，并对空图、损坏文件和不支持格式安全报错。
 - 避免同时保留多个大响应体、原始头像和解码后像素缓冲。来源请求按顺序执行，Gfriends 文件树等大型索引应在一次进程中共享加载和解析结果。

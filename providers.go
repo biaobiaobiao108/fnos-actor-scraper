@@ -11,8 +11,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/PuerkitoBio/goquery"
 )
 
 const gfriendsTreeURL = "https://cdn.jsdelivr.net/gh/gfriends/gfriends@master/Filetree.json"
@@ -38,8 +36,9 @@ func (service *ProviderService) Scrape(ctx context.Context, name string) *ActorP
 		name string
 		run  func() (*ActorProfile, error)
 	}{
+		// 头像优先级：Gfriends（针对 AV 演员的头像库）→ Wikipedia → Wikidata。
+		// 简介优先级：Wikipedia → Wikidata；合并时保留各字段第一个非空值。
 		{"Gfriends", func() (*ActorProfile, error) { return service.scrapeGfriends(ctx, name) }},
-		{"Minnano-AV", func() (*ActorProfile, error) { return scrapeMinnano(ctx, service.upstream, name) }},
 		{"Wikipedia", func() (*ActorProfile, error) { return scrapeWikipedia(ctx, service.upstream, name) }},
 		{"Wikidata", func() (*ActorProfile, error) { return scrapeWikidata(ctx, service.upstream, name) }},
 	}
@@ -49,12 +48,6 @@ func (service *ProviderService) Scrape(ctx context.Context, name string) *ActorP
 		}
 		profile, err := provider.run()
 		if err != nil {
-			if provider.name == "Minnano-AV" && strings.Contains(err.Error(), "HTTP 403") {
-				if service.disable(provider.name) {
-					fmt.Printf("来源 Minnano-AV 返回 HTTP 403，本次运行将跳过该来源并继续尝试其他来源\n")
-				}
-				continue
-			}
 			fmt.Printf("%s 的来源 %s 查询失败：%v\n", name, provider.name, err)
 			continue
 		}
@@ -304,99 +297,6 @@ func gfriendsRawURL(path string) string {
 	return result
 }
 
-func scrapeMinnano(ctx context.Context, upstream *Upstream, name string) (*ActorProfile, error) {
-	const base = "https://www.minnano-av.com"
-	query := url.Values{"search_scope": {"actress"}, "search_word": {name}, "search": {" Go "}}
-	searchURL := base + "/search_result.php?" + query.Encode()
-	html, err := fetchText(ctx, upstream, searchURL)
-	if err != nil {
-		return nil, err
-	}
-	document, err := goquery.NewDocumentFromReader(strings.NewReader(html))
-	if err != nil {
-		return nil, err
-	}
-	type candidate struct {
-		label, context, target string
-		score                  float64
-	}
-	candidates := make(map[string]candidate)
-	document.Find("a[href]").Each(func(_ int, selection *goquery.Selection) {
-		href, exists := selection.Attr("href")
-		if !exists || !strings.Contains(href, "actress") || !strings.Contains(href, ".html") {
-			return
-		}
-		label := cleanText(selection.Text())
-		contextText := cleanText(selection.Closest("li, tr, .actress, section, article").Text())
-		if contextText == "" {
-			contextText = label
-		}
-		target := absoluteURL(base, href)
-		if target == "" {
-			return
-		}
-		score := max(nameSimilarity(name, label), nameSimilarity(name, contextText))
-		threshold := 1.0
-		if runeCount(normalizeName(name)) >= 4 {
-			threshold = 0.7
-		}
-		if score >= threshold {
-			candidates[target] = candidate{label: label, context: contextText, target: target, score: score}
-		}
-	})
-	items := make([]candidate, 0, len(candidates))
-	for _, item := range candidates {
-		items = append(items, item)
-	}
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].score == items[j].score {
-			return items[i].target < items[j].target
-		}
-		return items[i].score > items[j].score
-	})
-	if len(items) == 0 {
-		return nil, nil
-	}
-	profileHTML, err := fetchText(ctx, upstream, items[0].target)
-	if err != nil {
-		return nil, err
-	}
-	page, err := goquery.NewDocumentFromReader(strings.NewReader(profileHTML))
-	if err != nil {
-		return nil, err
-	}
-	profileRoot := page.Find(".actress-header .act-profile, .actress-header").First()
-	imageURL, _ := profileRoot.Find("img").First().Attr("data-src")
-	if imageURL == "" {
-		imageURL, _ = profileRoot.Find("img").First().Attr("src")
-	}
-	if imageURL == "" {
-		imageURL, _ = page.Find(`meta[property="og:image"]`).Attr("content")
-	}
-	imageURL = absoluteURL(base, imageURL)
-	aliases := []string{items[0].label}
-	profileRoot.Find("a").Each(func(_ int, selection *goquery.Selection) { aliases = append(aliases, cleanText(selection.Text())) })
-	facts := make([]string, 0)
-	page.Find(".actress-header tr, .act-profile tr, .actress-profile tr").Each(func(_ int, row *goquery.Selection) {
-		cells := row.Find("th,td")
-		if cells.Length() < 2 {
-			return
-		}
-		label, value := cleanText(cells.Eq(0).Text()), cleanText(cells.Eq(1).Text())
-		if label != "" && value != "" {
-			facts = append(facts, label+"："+value)
-		}
-	})
-	biography := strings.Join(facts, "；")
-	if biography == "" {
-		biography = cleanText(profileRoot.Find("p").Text())
-	}
-	if biography == "" {
-		biography, _ = page.Find(`meta[name="description"]`).Attr("content")
-	}
-	return &ActorProfile{Name: name, Aliases: unique(aliases), ImageURL: imageURL, Biography: cleanText(biography), SourceURLs: []string{items[0].target}, SourceNames: []string{"Minnano-AV"}}, nil
-}
-
 func scrapeWikipedia(ctx context.Context, upstream *Upstream, name string) (*ActorProfile, error) {
 	for _, language := range []string{"zh", "ja"} {
 		query := url.Values{"action": {"query"}, "generator": {"search"}, "gsrsearch": {name}, "gsrnamespace": {"0"}, "gsrlimit": {"5"}, "prop": {"extracts|pageimages"}, "exintro": {"1"}, "explaintext": {"1"}, "piprop": {"thumbnail"}, "pithumbsize": {"640"}, "format": {"json"}, "formatversion": {"2"}, "utf8": {"1"}}
@@ -442,20 +342,3 @@ func scrapeWikipedia(ctx context.Context, upstream *Upstream, name string) (*Act
 	}
 	return nil, nil
 }
-
-func absoluteURL(base, value string) string {
-	if strings.TrimSpace(value) == "" {
-		return ""
-	}
-	baseURL, err := url.Parse(base)
-	if err != nil {
-		return ""
-	}
-	valueURL, err := url.Parse(value)
-	if err != nil {
-		return ""
-	}
-	return baseURL.ResolveReference(valueURL).String()
-}
-
-func cleanText(value string) string { return strings.Join(strings.Fields(value), " ") }

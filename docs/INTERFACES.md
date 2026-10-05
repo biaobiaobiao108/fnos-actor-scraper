@@ -34,7 +34,7 @@ fnactor [--actor NAME | --root DIR] [--db FILE] [--cache DIR] [--limit N] [--con
 | `--overwrite` | 关闭 | 覆盖已有的本地未锁定字段；必须与 `--apply` 配合 |
 | `--help` | — | 显示帮助信息 |
 
-Docker 镜像无参数启动时只显示用法并保持空闲，不会自动批量扫描。在容器终端运行 `fnactor --limit 20` 才开始预览；显式添加 `--apply` 才会写入飞牛。数据库批量模式会跳过纯数字名称记录，因为在线来源按演员姓名检索。Minnano-AV 在本次运行首次返回 HTTP 403 后会被暂时停用，程序继续尝试其他来源，避免重复请求和刷屏。
+Docker 镜像无参数启动时只显示用法并保持空闲，不会自动批量扫描。在容器终端运行 `fnactor --limit 20` 才开始预览；显式添加 `--apply` 才会写入飞牛。数据库批量模式会跳过纯数字名称记录，因为在线来源按演员姓名检索。头像优先级为 Gfriends、Wikipedia、Wikidata；简介优先级为 Wikipedia、Wikidata。Minnano-AV 因持续返回 HTTP 403 已移除。
 
 示例：
 
@@ -128,7 +128,7 @@ volumes:
 
 接口参数和响应以当前飞牛前端实现为准；它们不是公开稳定 API。程序必须在保存前重新校验档案保护状态。升级后若请求失败，应核对新版前端调用，不要绕过 API 写数据库。
 
-在线资料来源包括 Gfriends、Minnano-AV、Wikipedia 和 Wikidata。HTML 使用 goquery 解析；结构化接口使用 Go 标准库 JSON/XML。头像只从允许的 HTTPS 来源下载，通过格式、字节数和像素数检查后再上传。MDC-NG 也列有 Graphis 演员来源；Graphis 页面明确限制未经授权转载其图片，因此本项目不复制该站图片。
+在线资料来源包括 Gfriends、Wikipedia 和 Wikidata。结构化接口使用 Go 标准库 JSON/XML。头像只从允许的 HTTPS 来源下载，通过格式、字节数和像素数检查后再上传。MDC-NG 还使用 Graphis 作为优先图片源；其演员日志显示 Graphis 对部分演员可用、对其他演员无结果。Graphis 条款限制未经书面许可的自动化采集，因此本项目不直接抓取 Graphis；头像覆盖优先使用 Gfriends 社区头像库，Wikipedia/Wikidata 作为补充。MDC-NG 公开仓库未包含后端源码，Graphis 的请求实现无法从公开代码核验。
 
 ## 故障排查
 
