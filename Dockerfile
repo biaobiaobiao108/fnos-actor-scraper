@@ -1,10 +1,12 @@
-FROM golang:alpine AS build
+FROM --platform=$BUILDPLATFORM golang:alpine AS build
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /src
 RUN apk add --no-cache ca-certificates
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/fnactor .
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w" -o /out/fnactor .
 
 FROM alpine:latest
 RUN apk add --no-cache ca-certificates tzdata
