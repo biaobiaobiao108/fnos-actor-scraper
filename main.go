@@ -13,6 +13,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"time"
+	"unicode"
 )
 
 type options struct {
@@ -83,6 +84,10 @@ func run() error {
 	if args.NArg() > 0 {
 		return fmt.Errorf("不支持的位置参数：%s", strings.Join(args.Args(), " "))
 	}
+	if len(os.Args) == 1 {
+		args.Usage()
+		return nil
+	}
 	if o.limit < 0 {
 		return fmt.Errorf("--limit 必须是非负整数")
 	}
@@ -96,6 +101,9 @@ func run() error {
 		o.actor = strings.TrimSpace(o.actor)
 		if o.actor == "" {
 			return fmt.Errorf("--actor 不能为空")
+		}
+		if isNumericActorName(o.actor) {
+			return fmt.Errorf("演员名 %q 是纯数字；本程序按演员名称匹配，请提供真实演员姓名", o.actor)
 		}
 	}
 	if o.probe && o.actor == "" {
@@ -176,14 +184,36 @@ func collectTasks(o options) ([]task, error) {
 		return nil, fmt.Errorf("读取飞牛演员数据库失败：%w；请确认数据库路径存在且数据库目录未设为 Docker 只读挂载（程序以 mode=ro 查询，WAL 模式仍需要处理临时 SHM 锁文件）", err)
 	}
 	result := make([]task, 0, len(people))
+	skippedNumeric := 0
 	for index := range people {
 		person := people[index]
 		name := firstNonempty(person.Name, person.OriginalName)
-		if name != "" {
-			result = append(result, task{name: name, count: 1, person: &person})
+		if name == "" {
+			continue
 		}
+		if isNumericActorName(name) {
+			skippedNumeric++
+			continue
+		}
+		result = append(result, task{name: name, count: 1, person: &person})
+	}
+	if skippedNumeric > 0 {
+		fmt.Printf("跳过 %d 条纯数字名称记录（看起来是演员编号，无法按名称查询资料）\n", skippedNumeric)
 	}
 	return result, nil
+}
+
+func isNumericActorName(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	for _, char := range name {
+		if !unicode.IsDigit(char) {
+			return false
+		}
+	}
+	return true
 }
 
 func processActor(ctx context.Context, client *FnOSClient, providers *ProviderService, upstream *Upstream, item task, o options) error {

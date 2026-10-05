@@ -34,6 +34,8 @@ fnactor [--actor NAME | --root DIR] [--db FILE] [--cache DIR] [--limit N] [--con
 | `--overwrite` | 关闭 | 覆盖已有的本地未锁定字段；必须与 `--apply` 配合 |
 | `--help` | — | 显示帮助信息 |
 
+Docker 镜像无参数启动时只显示用法并保持空闲，不会自动批量扫描。在容器终端运行 `fnactor --limit 20` 才开始预览；显式添加 `--apply` 才会写入飞牛。数据库批量模式会跳过纯数字名称记录，因为在线来源按演员姓名检索。Minnano-AV 在本次运行首次返回 HTTP 403 后会被暂时停用，程序继续尝试其他来源，避免重复请求和刷屏。
+
 示例：
 
 ```sh

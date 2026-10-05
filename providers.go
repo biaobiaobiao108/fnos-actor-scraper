@@ -18,16 +18,18 @@ import (
 const gfriendsTreeURL = "https://cdn.jsdelivr.net/gh/gfriends/gfriends@master/Filetree.json"
 
 type ProviderService struct {
-	upstream *Upstream
-	cacheDir string
-	refresh  bool
-	treeOnce sync.Once
-	tree     map[string]any
-	treeErr  error
+	upstream   *Upstream
+	cacheDir   string
+	refresh    bool
+	treeOnce   sync.Once
+	tree       map[string]any
+	treeErr    error
+	disabledMu sync.Mutex
+	disabled   map[string]bool
 }
 
 func NewProviderService(upstream *Upstream, cacheDir string, refresh bool) *ProviderService {
-	return &ProviderService{upstream: upstream, cacheDir: cacheDir, refresh: refresh}
+	return &ProviderService{upstream: upstream, cacheDir: cacheDir, refresh: refresh, disabled: make(map[string]bool)}
 }
 
 func (service *ProviderService) Scrape(ctx context.Context, name string) *ActorProfile {
@@ -42,8 +44,17 @@ func (service *ProviderService) Scrape(ctx context.Context, name string) *ActorP
 		{"Wikidata", func() (*ActorProfile, error) { return scrapeWikidata(ctx, service.upstream, name) }},
 	}
 	for _, provider := range providers {
+		if service.isDisabled(provider.name) {
+			continue
+		}
 		profile, err := provider.run()
 		if err != nil {
+			if provider.name == "Minnano-AV" && strings.Contains(err.Error(), "HTTP 403") {
+				if service.disable(provider.name) {
+					fmt.Printf("来源 Minnano-AV 返回 HTTP 403，本次运行将跳过该来源并继续尝试其他来源\n")
+				}
+				continue
+			}
 			fmt.Printf("%s 的来源 %s 查询失败：%v\n", name, provider.name, err)
 			continue
 		}
@@ -71,6 +82,22 @@ func (service *ProviderService) Scrape(ctx context.Context, name string) *ActorP
 	}
 	merged.Aliases, merged.SourceURLs, merged.SourceNames = unique(merged.Aliases), unique(merged.SourceURLs), unique(merged.SourceNames)
 	return merged
+}
+
+func (service *ProviderService) isDisabled(name string) bool {
+	service.disabledMu.Lock()
+	defer service.disabledMu.Unlock()
+	return service.disabled[name]
+}
+
+func (service *ProviderService) disable(name string) bool {
+	service.disabledMu.Lock()
+	defer service.disabledMu.Unlock()
+	if service.disabled[name] {
+		return false
+	}
+	service.disabled[name] = true
+	return true
 }
 
 func scrapeWikidata(ctx context.Context, upstream *Upstream, name string) (*ActorProfile, error) {

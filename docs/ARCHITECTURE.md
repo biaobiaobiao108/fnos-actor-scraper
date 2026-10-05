@@ -2,7 +2,7 @@
 
 ## 目标
 
-`fnactor` 是面向飞牛 OS 的 Go CLI 容器任务，用于为飞牛影视中的本地演员中央档案补充头像和简介。一次命令处理完任务后退出。一个演员被多部影片引用时，对应同一条中央 person 记录，因此只需维护这条档案。
+`fnactor` 是面向飞牛 OS 的 Go CLI 工具，用于为飞牛影视中的本地演员中央档案补充头像和简介。Docker 容器启动后默认打印用法并保持空闲，用户手动执行 `fnactor ...` 才开始任务；CLI 一次命令处理完后退出。一个演员被多部影片引用时，对应同一条中央 person 记录，因此只需维护这条档案。
 
 当前用户 NAS 上只读确认：演员主记录位于 `/usr/local/apps/@appdata/trim.media/database/trimmedia.db` 的 `person` 表；影片与演员关系另存于 `item_person`；头像图片由飞牛放在 `/vol1/@appmeta/trim.media/img` 下的内部哈希目录。程序无需直接访问或挂载头像目录。
 
@@ -18,7 +18,7 @@
 ## 输入和候选人筛选
 
 1. 默认打开 `FNOS_DB_PATH` 指定的 SQLite 文件，缺省为 `/fnos-db/trimmedia.db`，以只读连接读取 `person` 表。
-2. 校验必要 schema 后，只选择 `trim_id` 以 `LOCAL_PERSON_` 开头且没有 TMDb/IMDb 标识的本地人物。
+2. 校验必要 schema 后，只选择 `trim_id` 以 `LOCAL_PERSON_` 开头且没有 TMDb/IMDb 标识的本地人物；纯数字名称视为无效编号并跳过，因为上游按演员名称查询。
 3. 用户可用 `--limit` 限制数量；`--actor` 指定单人；`--root` 只读扫描 NFO 中的演员名并筛选任务。
 4. `--actor` 单人模式不要求挂载数据库。`--root` 仅是可选名称来源，不是演员档案目录。
 5. `--probe --actor NAME` 仅调用公网来源并在内存中处理头像，用于检查代理和上游，不登录飞牛、不写入任何资料。
@@ -67,4 +67,4 @@ FnOS API 走容器 host 网络访问 NAS 本机 `http://127.0.0.1:5666`。公网
 
 ## 部署形态
 
-容器镜像应提供 `fnactor` 命令入口，按需通过 Compose 手动启动，不作为常驻服务。默认挂载只包含 FnOS 数据库目录（只读）与持久缓存目录（可写）；不挂载飞牛图片目录。选用 `--root` 时才额外挂载实际存在的 NFO 媒体目录且保持只读。
+容器无参数启动时显示用法并空闲等待；用户可从容器终端执行 `fnactor ...`，或通过 `docker compose run --rm fnactor ...` 运行一次性任务。默认挂载只包含 FnOS 数据库目录（只读）与持久缓存目录（可写）；不挂载飞牛图片目录。选用 `--root` 时才额外挂载实际存在的 NFO 媒体目录且保持只读。

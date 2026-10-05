@@ -23,7 +23,7 @@ ghcr.io/biaobiaobiao108/fnos-actor-scraper:latest
 
 ### 飞牛 NAS 部署步骤
 
-本项目是按需运行的 CLI 容器，不是常驻服务。每次用 Docker Compose 启动一个任务，任务完成后容器退出。下面以飞牛 NAS 上的 `/vol1/docker/fnactor-deploy` 作为部署目录；请先确认 NAS 已安装 Docker/Compose，并能访问 GHCR。
+本项目是按需运行的 CLI 工具。容器启动后只显示简短用法并保持空闲，不会自行扫描演员；你在容器终端输入 `fnactor ...` 后才会执行任务。也可以继续用 Docker Compose 启动一次性任务，处理完成后容器退出。下面以飞牛 NAS 上的 `/vol1/docker/fnactor-deploy` 作为部署目录；请先确认 NAS 已安装 Docker/Compose，并能访问 GHCR。
 
 1. SSH 登录飞牛 NAS，准备部署目录和持久化缓存目录：
 
@@ -84,6 +84,16 @@ ghcr.io/biaobiaobiao108/fnos-actor-scraper:latest
    docker compose pull fnactor
    docker compose run --rm fnactor --limit 20
    ```
+
+   如果希望在飞牛 Docker 管理界面保留一个空闲容器，启动后再手动输入命令：
+
+   ```sh
+   docker compose --profile manual up -d fnactor
+   docker exec -it fnactor sh
+   fnactor --limit 20
+   ```
+
+   也可以在 Docker 管理界面打开 `fnactor` 的终端，直接运行 `fnactor --limit 20`。容器启动日志只显示用法提示；默认不扫描、不刮削。批量写入必须显式运行带 `--apply` 的命令。
 
    首次运行建议先用 `--limit 20` 检查候选与计划。命令输出只预览，不会写入档案。单人在线来源诊断可用 `--probe`，例如：
 

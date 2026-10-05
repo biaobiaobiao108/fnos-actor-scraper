@@ -12,8 +12,10 @@ FROM alpine:latest
 RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 COPY --from=build /out/fnactor /usr/local/bin/fnactor
+COPY docker-entrypoint.sh /usr/local/bin/fnactor-entrypoint
+RUN chmod +x /usr/local/bin/fnactor-entrypoint
 ENV CACHE_DIR=/config \
     FNOS_DB_PATH=/fnos-db/trimmedia.db \
     GOMEMLIMIT=640MiB \
     GOGC=75
-ENTRYPOINT ["fnactor"]
+ENTRYPOINT ["/usr/local/bin/fnactor-entrypoint"]
