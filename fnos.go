@@ -227,6 +227,9 @@ func (client *FnOSClient) UploadProfile(ctx context.Context, image []byte) (stri
 	if _, err := part.Write(image); err != nil {
 		return "", err
 	}
+	if err := writer.WriteField("image_type", "poster"); err != nil {
+		return "", err
+	}
 	if err := writer.Close(); err != nil {
 		return "", err
 	}

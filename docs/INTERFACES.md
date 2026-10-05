@@ -123,7 +123,7 @@ volumes:
 | `POST /v/api/v1/login` | 兼容旧版飞牛登录；仅当 v2 接口明确返回 `Invalid Params` 时调用，发送用户名、原始密码和 `app_name=trimemedia-web`，取得会话 token 后继续 API 调用 |
 | `POST /v/api/v1/person/search` | 按名称查找 person |
 | `POST /v/api/v1/person/getEditDetail` | 读取档案、官方标记和字段锁定信息 |
-| `POST /v/api/v1/image/temp/upload` | 上传头像并取得临时图片标识 |
+| `POST /v/api/v1/image/temp/upload` | 上传 multipart 头像，字段为 `file` 和 `image_type=poster`，取得临时图片标识 |
 | `POST /v/api/v1/person/saveEditDetail` | 保存中央演员档案 |
 
 接口参数和响应以当前飞牛前端实现为准；它们不是公开稳定 API。程序必须在保存前重新校验档案保护状态。升级后若请求失败，应核对新版前端调用，不要绕过 API 写数据库。
