@@ -7,16 +7,20 @@ services:
     env_file:
       - .env
     environment:
-      MEDIA_ROOT: /media
       CACHE_DIR: /config
+      FNOS_DB_PATH: /fnos-db/trimmedia.db
       FNOS_URL: ${FNOS_URL}
       FNOS_USERNAME: ${FNOS_USERNAME}
       FNOS_PASSWORD: ${FNOS_PASSWORD}
       FNOS_TOKEN: ${FNOS_TOKEN:-}
       UPSTREAM_DELAY_MS: ${UPSTREAM_DELAY_MS:-2000}
     volumes:
-      # Mount only the actual FnOS library folder containing the movie/TV NFO files.
-      # Read-only is sufficient: the program never writes media or NFO files.
-      - ${MEDIA_HOST_PATH:-/path/to/fnos-library}:/media:ro
-      - /mnt/docker_disk/fnos-actor-scraper:/config
+      # Read-only actor/person records from the current FnOS Media database directory.
+      - type: bind
+        source: /usr/local/apps/@appdata/trim.media/database
+        target: /fnos-db
+        read_only: true
+      - type: bind
+        source: /vol1/docker/fnactor-cache
+        target: /config
     profiles: ["manual"]

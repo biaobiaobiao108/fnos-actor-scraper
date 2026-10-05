@@ -1,129 +1,135 @@
 # 接口与使用说明
 
-## CLI
+## 演员资料存放位置
+
+飞牛影视的演员信息不是独立的演员 NFO 目录。当前在用户 NAS `flymoo` 上核实到：演员资料保存在 FnOS Media 数据库 `trimmedia.db` 的 `person` 表，电影与演员的关系另存在 `item_person` 表；应用图片目录为 `/vol1/@appmeta/trim.media/img`，内部按哈希分级存放图片。
+
+因此默认批量模式读取演员数据库中的本地 person 记录，不扫描影片目录；图片不从文件系统直接替换，而通过飞牛影视 API 上传。只有显式使用 `--root` 时，程序才会读取媒体 NFO 中的演员名作为筛选条件。
+
+当前 NAS 数据库目录为：
 
 ```text
-fnactor [--actor NAME | --root DIR] [--cache DIR] [--limit N] [--concurrency N] [--refresh] [--apply] [--overwrite]
+/usr/local/apps/@appdata/trim.media/database/
+```
+
+目录中除 `trimmedia.db` 外，当时也存在 `trimmedia.db-wal` 和 `trimmedia.db-shm`，所以应将**整个数据库目录以只读方式**挂载进容器。不要只挂主库文件，也不要直接编辑或替换数据库/WAL/SHM。
+
+## 命令行
+
+```text
+fnactor [--actor NAME | --root DIR] [--db FILE] [--cache DIR] [--limit N] [--concurrency N] [--refresh] [--apply] [--overwrite]
 ```
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `--actor NAME` | 无 | 只处理一个演员名，不需要媒体目录挂载 |
-| `--root DIR` | `MEDIA_ROOT` 或 `/media` | 批量扫描 NFO 的目录，只读 |
+| `--actor NAME` | 无 | 只处理指定演员；此模式不需要数据库挂载 |
+| `--root DIR` | 无 | 从此目录递归读取 NFO 名称，并用名称筛选飞牛演员记录 |
+| `--db FILE` | `FNOS_DB_PATH` 或 `/fnos-db/trimmedia.db` | 默认批量模式读取的飞牛影视数据库文件 |
 | `--cache DIR` | `CACHE_DIR` 或 `/config` | 在线资料缓存目录，应持久化 |
-| `--limit N` | `0` | 最多处理数量；0 表示不限 |
-| `--concurrency N` | `1` | 同时处理演员数，最大为 3 |
-| `--refresh` | 关闭 | 忽略该演员资料缓存并重新抓取在线来源 |
-| `--apply` | 关闭 | 实际更新飞牛影视中央演员档案；缺省只预览 |
-| `--overwrite` | 关闭 | 配合 `--apply` 覆盖已有头像/简介；官方资料和锁定字段仍受保护 |
+| `--limit N` | `0` | 限制本次处理数量；0 表示不限 |
+| `--concurrency N` | `1` | 同时处理演员数，范围为 1–3 |
+| `--refresh` | 关闭 | 忽略演员在线资料缓存并重新查询来源 |
+| `--apply` | 关闭 | 实际更新飞牛中央演员档案；缺省只预览 |
+| `--overwrite` | 关闭 | 与 `--apply` 配合，覆盖已有的本地资料字段；仍保护官方资料与锁定字段 |
 | `--help` | — | 显示帮助 |
 
 示例：
 
 ```sh
-# 单人预览，不需要挂媒体目录
+# 默认直接从 person 表枚举本地演员，先预览 20 人
+docker compose run --rm fnactor --limit 20
+
+# 确认后写入缺失的头像和简介
+docker compose run --rm fnactor --limit 20 --apply
+
+# 单人模式不要求数据库或媒体目录
 docker compose run --rm fnactor --actor '三上悠亚'
 
-# 首次建议小批量预览
-docker compose run --rm fnactor --limit 5
-
-# 确认匹配后写入缺少的字段
-docker compose run --rm fnactor --limit 5 --apply
-
-# 强制刷新来源并覆盖本地档案已存在的头像/简介
-docker compose run --rm fnactor --actor '三上悠亚' --refresh --overwrite --apply
+# 如需只处理某个媒体目录中出现的演员，将该目录只读挂载到 /media
+docker compose run --rm fnactor --root /media --limit 20
 ```
 
 ## Docker 部署（飞牛 OS）
 
-### 挂载哪个目录
+1. 复制 `.env.example` 为 `.env`，填写飞牛地址及登录信息。
+2. 确认 Compose 中数据库源目录存在：
 
-批量模式需要把**飞牛影视实际媒体库目录**挂载进容器的 `/media`，因为电影/剧集 NFO 中包含演员名称。例如飞牛影视库是 `/vol1/video/movies`，映射为：
+   ```text
+   /usr/local/apps/@appdata/trim.media/database
+   ```
+
+   这是用户当前 NAS 上实测路径，不保证适用于其他 FnOS 安装位置。升级/迁移后如目录改变，应通过飞牛应用数据位置重新确认。
+
+3. 默认 Compose 使用只读数据库挂载及可写缓存挂载：
+
+   ```yaml
+   volumes:
+     - /usr/local/apps/@appdata/trim.media/database:/fnos-db:ro
+     - /vol1/docker/fnactor-cache:/config
+   ```
+
+4. 先预览小批量任务，再显式启用写入。
+
+默认**不需要挂载任何影视库目录**。之前文档中的 `/vol1/video/movies` 在用户 NAS 上不存在。当前媒体库根目录之一是 `/vol02/1000-1-17f2bfff/整理好的学习资料/No.1Style/`，抽查确认其中有 NFO；它仅可用作 `--root` 的可选输入，不是演员数据目录。其他已配置库包含 `/vol00/WDC WD6400BEVT-22A0RT0/Learning/` 和 `/vol02/1000-1-17f2bfff/整理好的学习资料/UnlimitedLearning_2/`。`/vol00`、`/vol02` 后面的挂载标识可能变化。
+
+如选择 `--root`，请按飞牛媒体库设置中的实际路径增加只读 bind mount，例如：
 
 ```yaml
 volumes:
-  - /vol1/video/movies:/media:ro
-  - /vol1/docker/fnos-actor-scraper:/config
+  - /vol02/1000-1-17f2bfff/整理好的学习资料/No.1Style:/media:ro
 ```
 
-若库分散在多个根目录，可以分别挂到 `/media/movies:ro`、`/media/tv:ro`。不要挂载影视应用数据库目录、飞牛私有图片目录或整个系统目录。容器**不需要**媒体目录写权限，也不需要访问 NFO 以外的影片内容。
+无需挂载 `/vol1/@appmeta/trim.media/img`、整个 `/vol1` 或媒体数据库以外的系统目录。数据库目录只读挂载只用于取得本地演员清单，所有保存操作仍经飞牛影视 API。
 
-如果只用 `--actor NAME` 单人处理，完全可以不挂载 `/media`。所有模式都需要把可写持久化目录挂到 `/config`，用于资料缓存。
-
-### 环境配置
-
-复制 `.env.example` 为 `.env`，设置：
-
-```dotenv
-FNOS_URL=https://飞牛地址:5667
-FNOS_USERNAME=飞牛用户名
-FNOS_PASSWORD=飞牛密码
-MEDIA_HOST_PATH=/vol1/video/movies
-```
-
-密码以明文保存在 `.env`，请限制该文件访问权限并勿提交到 Git。也可配置由飞牛 Web 登录获得的当前 `FNOS_TOKEN`，避免容器保存密码；token 过期后需更新。API 地址建议使用 HTTPS 和有效证书。若飞牛证书为自签名，优先配置受信任证书；程序不会关闭 TLS 校验。
-
-Compose 使用 host 网络，便于容器访问飞牛本机 Web API 和网络。根据实际环境可在 Docker 管理界面配置网络与卷；镜像：
+Compose 使用 host 网络，容器以 `manual` profile 按需运行，不是常驻服务。镜像为：
 
 ```text
 ghcr.io/biaobiaobiao108/fnos-actor-scraper:latest
 ```
 
-该容器是按需运行的 CLI，不是常驻服务。Compose 配置使用 `manual` profile，避免它随开机自动运行。可使用 `docker compose run --rm fnactor ...` 执行。容器内入口命令也叫 `fnactor`。
-
-### 重要行为
-
-- 程序通过 NFO 收集演员名称，但写入的是飞牛影视的**中央演员档案**。同一个人的头像和简介维护一次后，会显示在引用该演员的多个影片中。
-- 飞牛自己在线刮削出的官方/外部资料通过官方标记、TMDb/IMDb ID 及 `trim_id` 保守识别并跳过；不直接修改 SQLite。
-- 默认补空字段。资料完整时重复运行会跳过。`--overwrite` 只对本地档案生效，且不会覆盖已锁定字段。
-- 程序不会自动新建 person 档案；演员在飞牛影视中不存在或重名时会跳过。请先在飞牛影视生成/确认演员档案，再处理。
-- 先用预览确认演员名称与目标档案；再用 `--limit` 小批量 `--apply`。字段锁定时需要先在飞牛影视中解除锁定。
-
-## 环境变量
+## 配置项
 
 | 名称 | 必需 | 用途 |
 | --- | --- | --- |
-| `FNOS_URL` | 是 | FnOS Web 地址，如 `https://192.168.1.10:5667` |
-| `FNOS_USERNAME` | 二选一 | 登录用户名 |
-| `FNOS_PASSWORD` | 二选一 | 登录密码 |
-| `FNOS_TOKEN` | 二选一 | 当前有效 API token；优先于用户名/密码 |
-| `MEDIA_ROOT` | 否 | NFO 扫描根目录，默认 `/media` |
-| `CACHE_DIR` | 否 | 缓存目录，默认 `/config` |
-| `UPSTREAM_DELAY_MS` | 否 | 上游请求最小间隔，默认 2000 毫秒，范围 500–60000 毫秒 |
+| `FNOS_URL` | 是 | FnOS Web 地址，例如 `https://192.168.1.10:5667` |
+| `FNOS_USERNAME` | 二选一 | 飞牛登录用户名 |
+| `FNOS_PASSWORD` | 二选一 | 飞牛登录密码 |
+| `FNOS_TOKEN` | 二选一 | 当前有效的 API token，优先于用户名/密码 |
+| `FNOS_DB_PATH` | 批量模式需要 | 容器内数据库文件，Compose 默认 `/fnos-db/trimmedia.db` |
+| `CACHE_DIR` | 否 | 在线资料缓存目录，默认 `/config` |
+| `UPSTREAM_DELAY_MS` | 否 | 上游 HTTP 请求最小间隔，默认 2000 毫秒，限制在 500–60000 毫秒 |
 
-## 批量并发与请求速度
+密码以明文保存在 `.env`，应限制文件权限并勿提交 Git。`FNOS_URL` 应使用 HTTPS 和有效证书。
 
-批量模式默认每次处理一个演员。`--concurrency 2` 或 `--concurrency 3` 可同时处理多个演员；最大为 3。所有在线资料及头像 HTTP 请求共用全局队列，同一时间最多一个请求在途，每次请求前至少等待 2 秒。理论上不超过每分钟 30 次，实际速度通常更慢，因为等待响应的时间也计入间隔。
+## 批量并发与上游限流
 
-HTTP 429、500、502、503、504 和网络失败会退避重试，最多尝试 3 次，并优先遵从 `Retry-After`。建议保留默认的 2000 毫秒间隔；若来源返回 429/403，停止批处理，将 `UPSTREAM_DELAY_MS` 提高到 5000–10000 后再续跑。缓存命中的演员不会再次请求资料来源；`--refresh` 会绕过资料缓存，应谨慎用于全库批处理。
+批量处理演员的默认并发为 1，最高 3。所有在线资料请求和头像下载共用一个串行队列，默认请求间隔至少 2 秒，同一时刻最多一个上游响应体在下载。理论请求频率不高于每分钟 30 次，实际会更慢，因为还需等待来源响应。
 
-## 内部 HTTP 接口
+遇到 429、常见 5xx 或网络错误时，程序进行有限退避并优先遵守 `Retry-After`。若上游返回 429/403，应停止批处理并调高 `UPSTREAM_DELAY_MS`（例如 5000–10000），稍后再续跑。不要对全库任务盲目启用 `--refresh`，它会重新查询已缓存的演员。
 
-当前实现调用飞牛影视 Web API：
+## 接口与数据源
+
+飞牛影视当前 Web API：
 
 | 请求 | 用途 |
 | --- | --- |
 | `POST /v/api/v1/user/loginByPassword?channel=v2` | SHA-256 密码登录 |
-| `POST /v/api/v1/person/search` | 按演员名搜索中央 person 记录 |
-| `POST /v/api/v1/person/getEditDetail` | 读取编辑详情及 `is_official`、外部 ID、字段锁定标志 |
-| `POST /v/api/v1/image/temp/upload` | 上传处理后的 JPEG 头像，读取 `hash_path` |
-| `POST /v/api/v1/person/saveEditDetail` | 保存中央演员档案头像和简介 |
+| `POST /v/api/v1/person/search` | 单人或 NFO 模式按姓名搜索 person |
+| `POST /v/api/v1/person/getEditDetail` | 读取演员编辑详情、官方标记和字段锁定状态 |
+| `POST /v/api/v1/image/temp/upload` | 上传处理后的头像并取得 `hash_path` |
+| `POST /v/api/v1/person/saveEditDetail` | 保存中央演员档案 |
 
-这些是从飞牛影视当前 Web 前端确认的内部接口，非公开稳定 API。兼容性取决于 FnOS 版本；接口异常时请保存报错和版本号。
+本地演员列表由 SQLite 只读查询取得，条件是 `trim_id` 以 `LOCAL_PERSON_` 开头且没有 TMDb/IMDb ID；写入前还通过 API 再次读取并验证编辑详情。SQLite 查询按当前 `person` schema 检查必需字段，不匹配时应报错停止。
 
-## 在线来源及缓存
+在线来源包括 Gfriends（头像）、Minnano-AV（演员资料）及 Wikipedia 中文/日文（头像与摘要）。来源缓存保存到 `/config/actors`，Gfriends 文件树缓存有效期为 24 小时。
 
-- Gfriends：头像索引，缓存文件树 24 小时。
-- Minnano-AV：演员头像与简洁资料字段。
-- Wikipedia 中文/日文：头像与摘要简介。
-- 合并时优先选第一个提供头像/简介的来源；查询失败会记录警告并继续。
-- 演员来源缓存存于 `/config/actors`，包含公开资料 URL 和文本；`--refresh` 重新查询。清除缓存不会删除飞牛头像或资料。
+上述飞牛 API 和数据库结构均为 FnOS 内部实现，非稳定公开接口。升级后若登录、查询或保存失败，应先核对新版前端/API/schema；不可通过直接写数据库绕过接口。
 
 ## 故障排查
 
-- `401/未登录`：检查 `FNOS_URL`、账户密码或刷新 `FNOS_TOKEN`；确认用户有飞牛影视编辑权限。
-- `找不到同名档案`：检查 NFO `<actor><name>` 与飞牛演员中心中的名称。程序要求精确名称匹配。
-- 显示官方/在线资料受保护：这是预期保护行为；官方资料不会由 `--overwrite` 改写。
-- 头像上传失败：检查 FnOS API 可达性、账号权限和图片上传限制；程序将图片转换为 2:3 JPEG。
-- 字段已锁定：在飞牛影视编辑对应演员并解除头像/简介锁定后再运行。
-- 资料来源没有结果：尝试 `--refresh`，检查容器 DNS/HTTPS 出网；未命中的查询结果也会缓存。
+- 数据库打不开：确认数据库目录以只读方式挂载到 `/fnos-db`，且主库与 `-wal`、`-shm` 文件可见；确认 `FNOS_DB_PATH` 指向主库。
+- schema 不兼容：检查当前 `person` 表字段；不要自行猜列名并继续运行。
+- `401/未登录`：检查飞牛地址、账户凭据或刷新 API token，并确认账户有媒体资料编辑权限。
+- 官方/在线资料受保护：这是预期行为；`--overwrite` 也不会覆盖。
+- 演员没有头像或简介来源：尝试单人 `--refresh`，检查 HTTPS 出网和上游是否限流。
+- 头像上传失败：检查 FnOS API 权限；头像会转换为 2:3 JPEG 后上传。

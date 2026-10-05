@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readdir, readFile, mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { FnOSClient } from "./fnos.ts";
+import { loadLocalPeople } from "./fnos-db.ts";
 import { fetchPortrait } from "./image.ts";
 import { parseActors } from "./nfo.ts";
 import { scrapeGfriends } from "./providers/gfriends.ts";
@@ -10,18 +11,19 @@ import { scrapeWikipedia } from "./providers/wikipedia.ts";
 import type { ActorProfile, FnPerson } from "./types.ts";
 import { normalizeName, unique } from "./util.ts";
 
-interface Options { root: string; cache: string; actor?: string; limit: number; concurrency: number; apply: boolean; overwrite: boolean; refresh: boolean; }
+interface Options { root?: string; database: string; cache: string; actor?: string; limit: number; concurrency: number; apply: boolean; overwrite: boolean; refresh: boolean; }
 const help = `fnactor — 补全飞牛影视中的本地演员档案
 
 用法：
   fnactor [--actor 演员名 | --root NFO目录] [--limit 数量] [--concurrency 数量] [--apply] [--overwrite] [--refresh]
 
 默认只预览，不写入飞牛资料。实际更新必须显式传 --apply。
-批量模式仅读取媒体库 NFO 收集演员名称，不修改 NFO/媒体文件。
+批量模式直接从飞牛影视数据库只读枚举本地演员，不需要挂载影视库。
 
 参数：
-  --actor NAME     只处理指定演员（不需要挂载媒体目录）
-  --root DIR       NFO 扫描目录（默认 MEDIA_ROOT 或 /media）
+  --actor NAME     只处理指定演员（不需要挂载数据库或媒体目录）
+  --root DIR       可选：只从此目录的 NFO 中选演员（需要只读挂载媒体目录）
+  --db FILE        飞牛影视数据库路径（默认 FNOS_DB_PATH 或 /fnos-db/trimmedia.db）
   --cache DIR      缓存目录（默认 CACHE_DIR 或 /config）
   --limit N        最多处理 N 个演员，0 表示不限制
   --concurrency N  同时处理的演员数，默认 1，最大 3
@@ -30,21 +32,22 @@ const help = `fnactor — 补全飞牛影视中的本地演员档案
   --refresh        忽略演员资料缓存并重新查询来源
   --help           显示帮助
 
-环境变量：FNOS_URL、FNOS_USERNAME、FNOS_PASSWORD（或 FNOS_TOKEN）、UPSTREAM_DELAY_MS（默认 2000）。`;
+环境变量：FNOS_URL、FNOS_USERNAME、FNOS_PASSWORD（或 FNOS_TOKEN）、FNOS_DB_PATH、UPSTREAM_DELAY_MS（默认 2000）。`;
 
 function optionsFromArgs(args: string[]): Options {
-  const options: Options = { root: process.env.MEDIA_ROOT || "/media", cache: process.env.CACHE_DIR || "/config", limit: 0, concurrency: 1, apply: false, overwrite: false, refresh: false };
+  const options: Options = { database: process.env.FNOS_DB_PATH || "/fnos-db/trimmedia.db", cache: process.env.CACHE_DIR || "/config", limit: 0, concurrency: 1, apply: false, overwrite: false, refresh: false };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     if (arg === "--help" || arg === "-h") { console.log(help); process.exit(0); }
     if (arg === "--apply") options.apply = true;
     else if (arg === "--overwrite") options.overwrite = true;
     else if (arg === "--refresh") options.refresh = true;
-    else if (["--actor", "--root", "--cache", "--limit", "--concurrency"].includes(arg)) {
+    else if (["--actor", "--root", "--db", "--cache", "--limit", "--concurrency"].includes(arg)) {
       const value = args[++i];
       if (!value || value.startsWith("--")) throw new Error(`${arg} 需要参数值`);
       if (arg === "--actor") options.actor = value.trim();
       else if (arg === "--root") options.root = value;
+      else if (arg === "--db") options.database = value;
       else if (arg === "--cache") options.cache = value;
       else if (arg === "--limit") { options.limit = Number(value); if (!Number.isInteger(options.limit) || options.limit < 0) throw new Error("--limit 必须是非负整数"); }
       else { options.concurrency = Number(value); if (!Number.isInteger(options.concurrency) || options.concurrency < 1 || options.concurrency > 3) throw new Error("--concurrency 必须在 1 到 3 之间"); }
@@ -123,12 +126,18 @@ async function scrapedProfile(name: string, cacheDir: string, refresh: boolean):
 
 async function main(): Promise<void> {
   const options = optionsFromArgs(Bun.argv.slice(2));
-  if (!options.actor && !options.root) throw new Error("请提供 --actor 或 --root");
-  const names = options.actor
-    ? new Map([[normalizeName(options.actor), { name: options.actor, count: 1 }]])
-    : await scanActors(options.root);
-  const selected = [...names.values()].slice(0, options.limit || undefined);
-  console.log(`收集到 ${names.size} 个演员名称，本次处理 ${selected.length} 个。模式：${options.apply ? "写入飞牛" : "预览"}`);
+  let tasks: Array<{ name: string; count: number; person?: FnPerson }>;
+  if (options.actor) {
+    tasks = [{ name: options.actor, count: 1 }];
+  } else if (options.root) {
+    tasks = [...(await scanActors(options.root)).values()];
+  } else {
+    tasks = loadLocalPeople(options.database)
+      .filter((person) => Boolean(person.name?.trim() || person.original_name?.trim()))
+      .map((person) => ({ name: person.name?.trim() || person.original_name!.trim(), count: 1, person }));
+  }
+  const selected = tasks.slice(0, options.limit || undefined);
+  console.log(`收集到 ${tasks.length} 个待处理演员，本次处理 ${selected.length} 个。模式：${options.apply ? "写入飞牛" : "预览"}`);
   if (!selected.length) return;
 
   const baseUrl = process.env.FNOS_URL;
@@ -138,10 +147,10 @@ async function main(): Promise<void> {
   const client = new FnOSClient(baseUrl, process.env.FNOS_USERNAME || "", process.env.FNOS_PASSWORD || "", process.env.FNOS_TOKEN);
   await client.login();
 
-  const processActor = async (item: { name: string; count: number }): Promise<void> => {
+  const processActor = async (item: { name: string; count: number; person?: FnPerson }): Promise<void> => {
     const name = item.name;
-    console.log(`\n[${name}] NFO 出现 ${item.count} 次`);
-    const matches = (await client.searchPeople(name)).filter((person) => exactNameMatch(person, name));
+    console.log(`\n[${name}]`);
+    const matches = item.person ? [item.person] : (await client.searchPeople(name)).filter((person) => exactNameMatch(person, name));
     if (!matches.length) { console.log("  跳过：飞牛中没有同名演员档案（本程序不会新建档案）"); return; }
     if (matches.length > 1) { console.log(`  跳过：找到 ${matches.length} 个同名档案，无法安全判断目标`); return; }
     const detail = await client.getEditDetail(matches[0]!.guid);
