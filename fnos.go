@@ -47,6 +47,8 @@ func (client *FnOSClient) request(ctx context.Context, path string, method strin
 		return err
 	}
 	request.Header.Set("Accept", "application/json")
+	request.Header.Set("X-Trim-Client", "web")
+	request.Header.Set("X-Trim-Client-Version", "631")
 	if client.token != "" {
 		request.Header.Set("authorization", client.token)
 	}
