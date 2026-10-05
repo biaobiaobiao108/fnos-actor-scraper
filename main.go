@@ -301,7 +301,7 @@ func probe(ctx context.Context, name string, o options) error {
 	var stats runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&stats)
-	fmt.Printf("诊断完成：耗时 %s，Go 堆当前 %.1f MiB，系统内存峰值 %.1f MiB\n", time.Since(started).Round(time.Millisecond), float64(stats.HeapAlloc)/1048576, float64(stats.Sys)/1048576)
+	fmt.Printf("诊断完成：耗时 %s，GC 后 Go 堆占用 %.1f MiB，Go 运行时保留内存 %.1f MiB\n", time.Since(started).Round(time.Millisecond), float64(stats.HeapAlloc)/1048576, float64(stats.Sys)/1048576)
 	return nil
 }
 
