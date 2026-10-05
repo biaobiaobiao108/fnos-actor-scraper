@@ -117,7 +117,7 @@ ghcr.io/biaobiaobiao108/fnos-actor-scraper:latest
 
 ### 后台监控新演员
 
-需要持续自动刮削时，显式启动单独的监控服务。首次运行立即扫描整个本地演员库；已有头像和简介分别跳过，只补缺失且未锁定的字段。首轮完成后继续轮询新入库演员。处理状态保存在 `/config/watch-state.json`，与 `/config/actors` 来源缓存一同持久化。旧版曾建立的基线会自动重置为全库扫描。监控模式必须显式带 `--apply`，因此启动监控服务代表授权它自动写入缺失资料。
+需要持续自动刮削时，显式启动单独的监控服务。首次运行立即扫描整个本地演员库；已有头像和简介分别跳过，只补缺失且未锁定的字段。首轮完成后继续轮询新入库演员。监控状态保存在 `/config/fnactor-state.db`，来源缓存仍保存在 `/config/actors` 和 Gfriends JSON 文件中，两者都由可写的 `/config` 持久化卷保存。旧版 `watch-state.json` 不导入；首次使用 SQLite 状态库时会重新扫描全库，已有资料仍逐字段跳过。失败任务会在 SQLite 中记录次数、错误和下次重试时间，重试间隔逐步延长，最长 24 小时。监控模式必须显式带 `--apply`，因此启动监控服务代表授权它自动写入缺失资料。
 
 ```sh
 # 启动后台监控服务（开启后会随 Docker 重启恢复）
@@ -130,7 +130,7 @@ docker logs -f fnactor-watch
 docker compose --profile watch stop fnactor-watch
 ```
 
-首次启用后会在 Docker 日志中显示全库扫描开始、逐位演员的刮削结果和后续监控信息。监控服务以前台方式运行，程序写入标准输出/错误输出，Docker 会收集到该容器的“运行日志”；Compose 为此服务配置 `json-file` 日志驱动，并保留最近 3 个、每个最多 10 MiB 的日志文件。若删除 `/config/watch-state.json`，下次启动会重新扫描全库，但已完整的字段仍会跳过。普通 `fnactor` 服务仍为空闲模式，不会因更新而自动开始刮削。
+首次启用后会在 Docker 日志中显示全库扫描开始、逐位演员的刮削结果和后续监控信息。监控服务以前台方式运行，程序写入标准输出/错误输出，Docker 会收集到该容器的“运行日志”；Compose 为此服务配置 `json-file` 日志驱动，并保留最近 3 个、每个最多 10 MiB 的日志文件。若要重置监控记录，先停止 `fnactor-watch`，再删除 `/config/fnactor-state.db` 及其 `-wal`、`-shm` 文件；下次启动会重新扫描全库，但已完整的字段仍会跳过。普通 `fnactor` 服务仍为空闲模式，不会因更新而自动开始刮削。
 
 ### Compose 挂载与网络说明
 
@@ -187,9 +187,9 @@ docker compose run --rm fnactor --actor '三上悠亚' --overwrite --apply
 
 - Go CLI 默认单次运行，另有必须显式启用的持续监控模式；Docker 默认启动仍为空闲，不会自动刮削。
 - 使用标准库 `net/http`、`encoding/json`、`encoding/xml` 访问结构化资料来源。
-- 使用 `modernc.org/sqlite` 只读访问飞牛影视 `person` 表。
+- 使用 `modernc.org/sqlite` 只读访问飞牛影视 `person` 表，并将监控状态保存在独立的 `/config/fnactor-state.db` 数据库中。
 - 使用 `golang.org/x/image/webp` 和标准库 JPEG 解码器处理头像，转换为 640×960 JPEG 后经飞牛 API 上传。
-- 头像按单张处理；下载/解码/尺寸失败会回退到下一来源，全部失败才跳过头像，并保留可写入的简介，不会终止整个批次。监控模式把已处理演员 GUID 保存在 `/config/watch-state.json`，首次扫描全库、之后按数据库轮询新记录。
+- 头像按单张处理；下载/解码/尺寸失败会回退到下一来源，全部失败才跳过头像，并保留可写入的简介，不会终止整个批次。监控模式把处理状态、重试次数和下次重试时间保存在 `/config/fnactor-state.db`，首次扫描全库、之后按数据库轮询新记录。
 - 在线来源包括 Gfriends、JavDB、Wikipedia 和 Wikidata。头像按 Gfriends、JavDB 演员搜索卡片、Wikipedia、Wikidata 的优先级逐个尝试，当前候选处理失败会回退到下一来源；简介优先采用 Wikipedia，其次 Wikidata。JavDB 只按精确演员名/别名匹配，不采信占位头像；它不提供可靠简介。缓存存放在 `/config`。
 - 飞牛 API 是其 Web 前端使用的内部接口，飞牛版本升级时可能变化；请求会附带前端客户端标识和签名，版本变化时需对照 NAS 前端资源核验。
 

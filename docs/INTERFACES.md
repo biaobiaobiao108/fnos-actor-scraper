@@ -59,7 +59,7 @@ docker compose run --rm fnactor --actor '三上悠亚' --overwrite --apply
 
 每次实际写入前先检查预览结果。官方人物、在线人物、有外部身份标识或被锁定的字段受保护，`--overwrite` 不会取消这些保护。
 
-监控是显式启用的持续模式。首次启动立即扫描当前本地演员库；已有头像和简介按字段分别跳过，只补缺失且未锁定字段。之后按轮询间隔发现新 GUID 并自动处理。启动 Compose 监控服务即明确授权 `--apply` 写入缺失资料。已处理 GUID 保存在 `/config/watch-state.json`；删除状态文件会重新扫描全库，但现有字段仍会跳过。日志由 Docker 收集，可在飞牛 Docker 的该容器“运行日志”中查看。Compose 为日志配置 `json-file` 驱动，最多保留 3 个、每个 10 MiB。暂停和恢复示例：
+监控是显式启用的持续模式。首次启动立即扫描当前本地演员库；已有头像和简介按字段分别跳过，只补缺失且未锁定字段。之后按轮询间隔发现新 GUID 并自动处理。启动 Compose 监控服务即明确授权 `--apply` 写入缺失资料。已处理 GUID 和重试状态保存在 `/config/fnactor-state.db`，演员资料缓存继续使用 JSON 文件。旧版 `/config/watch-state.json` 不导入，首次启用 SQLite 状态库会从全库扫描；停止监控后删除 SQLite 数据库及其 WAL/SHM 文件也会重新扫描全库，但现有字段仍会跳过。失败按逐渐延长的间隔重试，最长间隔 24 小时。日志由 Docker 收集，可在飞牛 Docker 的该容器“运行日志”中查看。Compose 为日志配置 `json-file` 驱动，最多保留 3 个、每个 10 MiB。暂停和恢复示例：
 
 ```sh
 docker compose --profile watch up -d fnactor-watch

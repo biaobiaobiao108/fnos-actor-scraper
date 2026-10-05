@@ -11,7 +11,7 @@
 - Go CLI，一次运行一个任务，处理结束后退出。Docker 镜像默认无参数启动时必须显示用法并保持空闲，用户显式输入 `fnactor ...` 才能开始任务。
 - 标准库 `net/http` 负责 HTTP，`encoding/json` 与 `encoding/xml` 负责结构化数据。
 - 标准库 JSON/XML 解码结构化来源。
-- `modernc.org/sqlite` 只读访问飞牛影视 SQLite `person` 表；使用纯 Go SQLite 实现，不直接写数据库。
+- `modernc.org/sqlite` 只读访问飞牛影视 SQLite `person` 表，并以可写 SQLite 保存 `/config/fnactor-state.db` 监控状态；使用纯 Go SQLite 实现，绝不向飞牛影视数据库写入。
 - `golang.org/x/image/webp` 和标准库 `image/jpeg` 相关解码能力处理头像；转换为 640×960 JPEG，再经飞牛 API 上传。
 - 在线来源适配器负责 Gfriends、JavDB、Wikipedia、Wikidata；缓存写入 `/config/actors`。
 - 飞牛 API 登录、搜索、读取编辑详情、上传头像和保存档案由 FnOS 客户端模块负责。
@@ -34,7 +34,8 @@
 
 - Go CLI 单次模式结束后退出；只有显式 `--watch --apply` 才持续轮询新演员。普通 Docker 容器无参数启动仍须保持空闲；Compose `watch` profile 是单独的可选自动写入服务。
 - 单张头像下载、解码或尺寸校验失败时继续尝试下一优先级来源；所有候选失败才跳过头像。如简介可用仍可更新简介，且继续处理后续演员。图片错误不能让批次退出。
-- 监控首次全库扫描本地演员，不建基线；已有字段逐项跳过，只补缺失且未锁定字段。之后持续轮询新演员。成功或安全跳过的 GUID 写入 `/config/watch-state.json`，处理错误保留待重试。状态文件必须原子更新并放在持久化缓存卷。
+- 监控首次全库扫描本地演员，不建基线；已有字段逐项跳过，只补缺失且未锁定字段。之后持续轮询新演员。监控状态写入可写且持久化的 `/config/fnactor-state.db` SQLite 数据库；成功或安全跳过的 GUID 标记为完成，失败记录尝试次数、错误和下次重试时间并使用退避间隔。旧版 JSON 状态不导入。
+- 演员来源缓存与 Gfriends 文件树仍使用独立 JSON 文件；它们是可重建的来源缓存，不与飞牛影视数据库或监控状态混用。
 - 监控服务需以前台进程运行，刮削结果通过 stdout/stderr 输出给 Docker 日志；Compose 监控服务配置 `json-file` 日志驱动和有限轮转，保证可在飞牛 Docker 运行日志查看且不会无限占用磁盘。
 
 - 所有公开资料页面和头像下载统一走上游 HTTP 客户端与全局队列。默认串行请求，最小间隔 2000 毫秒；配置 `UPSTREAM_DELAY_MS` 时需限制在安全合理范围。
