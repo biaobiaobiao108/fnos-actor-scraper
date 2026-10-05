@@ -3,13 +3,18 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
+	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"mime/multipart"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -42,6 +47,18 @@ func (err *fnosAPIError) Error() string {
 }
 
 func (client *FnOSClient) request(ctx context.Context, path string, method string, body io.Reader, contentType string, destination any) error {
+	var bodyBytes []byte
+	if body != nil {
+		var err error
+		bodyBytes, err = io.ReadAll(io.LimitReader(body, defaultBodyLimit+1))
+		if err != nil {
+			return err
+		}
+		if int64(len(bodyBytes)) > defaultBodyLimit {
+			return fmt.Errorf("FnOS API 请求体超过 16 MiB")
+		}
+		body = bytes.NewReader(bodyBytes)
+	}
 	request, err := http.NewRequestWithContext(ctx, method, client.base+path, body)
 	if err != nil {
 		return err
@@ -49,6 +66,7 @@ func (client *FnOSClient) request(ctx context.Context, path string, method strin
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("X-Trim-Client", "web")
 	request.Header.Set("X-Trim-Client-Version", "631")
+	request.Header.Set("authx", fnosSignature(request, bodyBytes, contentType))
 	if client.token != "" {
 		request.Header.Set("authorization", client.token)
 	}
@@ -91,6 +109,54 @@ func (client *FnOSClient) request(ctx context.Context, path string, method strin
 		}
 	}
 	return nil
+}
+
+func fnosSignature(request *http.Request, body []byte, contentType string) string {
+	var bodyHash string
+	if request.Method == http.MethodGet {
+		query := request.URL.Query()
+		keys := make([]string, 0, len(query))
+		for key := range query {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		parts := make([]string, 0, len(keys))
+		for _, key := range keys {
+			values := query[key]
+			if len(values) == 0 {
+				continue
+			}
+			value := values[len(values)-1]
+			if value == "undefined" || value == "null" {
+				continue
+			}
+			parts = append(parts, key+"="+value)
+		}
+		bodyHash = md5Hex([]byte(strings.Join(parts, "&")))
+	} else if strings.HasPrefix(contentType, "multipart/form-data") {
+		// The FnOS web client hashes JSON.stringify(FormData), which is "{}".
+		bodyHash = md5Hex([]byte("{}"))
+	} else {
+		bodyHash = md5Hex(body)
+	}
+
+	nonceNumber, err := cryptorand.Int(cryptorand.Reader, big.NewInt(900000))
+	if err != nil {
+		nonceNumber = big.NewInt(time.Now().UnixNano() % 900000)
+	}
+	nonce := strconv.FormatInt(nonceNumber.Int64()+100000, 10)
+	timestamp := strconv.FormatInt(time.Now().UnixMilli(), 10)
+	apiKeyBytes := []byte{152, 159, 234, 234, 236, 235, 154, 237, 132, 232, 235, 157, 155, 132, 153, 158, 158, 237, 132, 154, 159, 232, 152, 132, 239, 154, 156, 156, 154, 155, 157, 236, 157, 155, 154, 158}
+	for index := range apiKeyBytes {
+		apiKeyBytes[index] ^= 169
+	}
+	signatureInput := strings.Join([]string{"NDzZTVxnRKP8Z0jXg1VAMonaG8akvh", request.URL.EscapedPath(), nonce, timestamp, bodyHash, string(apiKeyBytes)}, "_")
+	return fmt.Sprintf("nonce=%s&timestamp=%s&sign=%s", nonce, timestamp, md5Hex([]byte(signatureInput)))
+}
+
+func md5Hex(data []byte) string {
+	hash := md5.Sum(data)
+	return hex.EncodeToString(hash[:])
 }
 
 func (client *FnOSClient) Login(ctx context.Context) error {

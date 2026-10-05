@@ -63,7 +63,7 @@ FnOS API 走容器 host 网络访问 NAS 本机 `http://127.0.0.1:5666`。公网
 
 ## FnOS 兼容性
 
-登录、人物查询、编辑详情、头像上传和保存依赖飞牛影视前端调用的 `/v/api/v1` 内部 API；请求需携带前端使用的 `X-Trim-Client`、`X-Trim-Client-Version` 和 `Authorization` 头。候选读取依赖 `trimmedia.db` 的 `person` schema。它们都不是稳定公开接口。升级飞牛后若接口或 schema 变化，应验证新版实现并更新适配；不兼容时明确报错停止，不允许猜字段继续运行或直接写 SQL 作为后备。
+登录、人物查询、编辑详情、头像上传和保存依赖飞牛影视前端调用的 `/v/api/v1` 内部 API；请求需携带前端使用的 `X-Trim-Client`、`X-Trim-Client-Version`、`authx` 签名和登录后的 `Authorization` 头。候选读取依赖 `trimmedia.db` 的 `person` schema。它们都不是稳定公开接口。升级飞牛后若接口或 schema 变化，应验证新版实现并更新适配；不兼容时明确报错停止，不允许猜字段继续运行或直接写 SQL 作为后备。
 
 ## 部署形态
 

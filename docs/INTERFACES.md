@@ -116,7 +116,7 @@ volumes:
 
 | 方法与路径 | 用途 |
 | --- | --- |
-| 所有飞牛 API 请求头 | 携带前端要求的 `X-Trim-Client: web`、`X-Trim-Client-Version: 631`；登录后另带原始 `Authorization` token |
+| 所有飞牛 API 请求头 | 携带前端要求的 `X-Trim-Client: web`、`X-Trim-Client-Version: 631`、按路径/请求内容计算的 `authx` 签名；登录后另带原始 `Authorization` token |
 | `POST /v/api/v1/user/loginByPassword?channel=v2` | 优先使用的飞牛用户登录接口；发送 `username`、SHA-256 十六进制密码摘要和 `app_name=trimemedia-web` |
 | `POST /v/api/v1/login` | 兼容旧版飞牛登录；仅当 v2 接口明确返回 `Invalid Params` 时调用，发送用户名、原始密码和 `app_name=trimemedia-web`，取得会话 token 后继续 API 调用 |
 | `POST /v/api/v1/person/search` | 按名称查找 person |
