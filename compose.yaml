@@ -3,6 +3,11 @@ x-fnactor-common: &fnactor-common
   build: .
   network_mode: host
   mem_limit: 768m
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
   env_file:
     - .env
   environment:

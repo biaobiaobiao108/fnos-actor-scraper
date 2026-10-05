@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const watchStateVersion = 1
+const watchStateVersion = 2
 
 type watchState struct {
 	Version int             `json:"version"`
@@ -25,21 +25,17 @@ func runWatch(o options) error {
 	if err != nil {
 		return err
 	}
-	if !exists {
-		current, err := collectTasks(o)
-		if err != nil {
-			return err
-		}
-		state = watchState{Version: watchStateVersion, Seen: make(map[string]bool, len(current))}
-		for _, item := range current {
-			if key := taskIdentity(item); key != "" {
-				state.Seen[key] = true
-			}
-		}
+	if !exists || state.Version == 1 {
+		previousCount := len(state.Seen)
+		state = watchState{Version: watchStateVersion, Seen: make(map[string]bool)}
 		if err := writeWatchState(statePath, state); err != nil {
 			return err
 		}
-		fmt.Printf("监控基线已建立：现有 %d 个演员不会被处理；之后新增的演员会自动处理。状态文件：%s\n", len(state.Seen), statePath)
+		if exists {
+			fmt.Printf("旧版监控状态已重置（旧基线包含 %d 个演员）；本次将从全库重新处理缺失资料。状态文件：%s\n", previousCount, statePath)
+		} else {
+			fmt.Printf("监控状态已初始化；本次将从全库开始，已有头像/简介会逐字段跳过。状态文件：%s\n", statePath)
+		}
 	}
 
 	base := strings.TrimSpace(os.Getenv("FNOS_URL"))
@@ -59,7 +55,7 @@ func runWatch(o options) error {
 	providers := NewProviderService(upstream, o.cache, o.refresh)
 	ticker := time.NewTicker(o.watchInterval)
 	defer ticker.Stop()
-	fmt.Printf("演员监控已启动，轮询间隔 %s；按 Ctrl+C 停止。\n", o.watchInterval)
+	fmt.Printf("演员监控已启动，首轮检查全库，之后每 %s 检查新增演员；日志输出到 Docker 标准日志。\n", o.watchInterval)
 	for {
 		if err := processNewActors(ctx, client, providers, upstream, o, &state, statePath); err != nil {
 			fmt.Fprintf(os.Stderr, "监控本轮失败：%v\n", err)
@@ -88,7 +84,7 @@ func processNewActors(ctx context.Context, client *FnOSClient, providers *Provid
 	if len(newTasks) == 0 {
 		return nil
 	}
-	fmt.Printf("发现 %d 个新演员，开始自动处理。\n", len(newTasks))
+	fmt.Printf("发现 %d 个待处理演员，开始自动处理。\n", len(newTasks))
 	for _, item := range newTasks {
 		if err := processActor(ctx, client, providers, upstream, item, o); err != nil {
 			// Keep failed actors unseen so a later poll can retry transient failures.
@@ -132,10 +128,10 @@ func readWatchState(path string) (watchState, bool, error) {
 	}
 	var state watchState
 	if err := json.Unmarshal(data, &state); err != nil {
-		return watchState{}, true, fmt.Errorf("监控状态文件 %s 无效：%w；请检查文件或移走后重新建立基线", path, err)
+		return watchState{}, true, fmt.Errorf("监控状态文件 %s 无效：%w；请检查文件或移走后重新开始全库扫描", path, err)
 	}
-	if state.Version != watchStateVersion || state.Seen == nil {
-		return watchState{}, true, fmt.Errorf("监控状态文件 %s 版本不兼容；请检查文件或移走后重新建立基线", path)
+	if state.Version != 1 && state.Version != watchStateVersion || state.Seen == nil {
+		return watchState{}, true, fmt.Errorf("监控状态文件 %s 版本不兼容；请检查文件或移走后重新开始全库扫描", path)
 	}
 	return state, true, nil
 }

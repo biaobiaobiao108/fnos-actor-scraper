@@ -32,7 +32,7 @@ fnactor [--actor NAME | --root DIR | --watch] [--db FILE] [--cache DIR] [--limit
 | `--probe` | 关闭 | 需要 `--actor`；抓取在线资料并处理头像，不登录、不写飞牛 |
 | `--apply` | 关闭 | 实际调用飞牛 API 保存资料；缺省为预览 |
 | `--overwrite` | 关闭 | 覆盖已有的本地未锁定字段；必须与 `--apply` 配合 |
-| `--watch` | 关闭 | 持续监控新入库演员；首次仅建立现有演员基线，必须与 `--apply` 配合，且不能和 `--actor`、`--root`、`--probe`、`--limit`、`--overwrite` 同用；顺序处理 |
+| `--watch` | 关闭 | 持续监控演员库；首次全库扫描并只补缺失字段，必须与 `--apply` 配合，且不能和 `--actor`、`--root`、`--probe`、`--limit`、`--overwrite` 同用；顺序处理 |
 | `--watch-interval DURATION` | `1m` | 监控轮询间隔，范围 `10s` 到 `24h` |
 | `--help` | — | 显示帮助信息 |
 
@@ -59,7 +59,7 @@ docker compose run --rm fnactor --actor '三上悠亚' --overwrite --apply
 
 每次实际写入前先检查预览结果。官方人物、在线人物、有外部身份标识或被锁定的字段受保护，`--overwrite` 不会取消这些保护。
 
-监控是显式启用的持续模式。首次启动读取当前本地演员名单并写入 `/config/watch-state.json`，不会处理已有记录；后续按轮询间隔发现新的 GUID 后自动处理并保存。启动 Compose 监控服务即明确授权 `--apply` 对新演员执行写入。监控状态文件应与来源缓存一起持久化；删除该文件会在下次启动重新建立基线。暂停和恢复示例：
+监控是显式启用的持续模式。首次启动立即扫描当前本地演员库；已有头像和简介按字段分别跳过，只补缺失且未锁定字段。之后按轮询间隔发现新 GUID 并自动处理。启动 Compose 监控服务即明确授权 `--apply` 写入缺失资料。已处理 GUID 保存在 `/config/watch-state.json`；删除状态文件会重新扫描全库，但现有字段仍会跳过。日志由 Docker 收集，可在飞牛 Docker 的该容器“运行日志”中查看。Compose 为日志配置 `json-file` 驱动，最多保留 3 个、每个 10 MiB。暂停和恢复示例：
 
 ```sh
 docker compose --profile watch up -d fnactor-watch

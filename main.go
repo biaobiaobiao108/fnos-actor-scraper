@@ -271,17 +271,30 @@ func processActor(ctx context.Context, client *FnOSClient, providers *ProviderSe
 		fmt.Println("  跳过：该档案不是可安全修改的本地演员资料（官方/在线资料受保护）")
 		return nil
 	}
-	profile := cachedScrape(ctx, providers, name, o.cache, o.refresh)
-	if profile == nil || len(portraitCandidates(profile)) == 0 && profile.Biography == "" {
-		fmt.Println("  未找到可用头像或简介")
-		return nil
-	}
 	hasBio := strings.TrimSpace(detail.Biography) != ""
 	hasImage := strings.TrimSpace(detail.ProfilePath) != ""
 	needsBio := o.overwrite || !hasBio
 	needsImage := o.overwrite || !hasImage
-	canBio := needsBio && !detail.BiographyLocked && strings.TrimSpace(profile.Biography) != ""
-	canImage := needsImage && !detail.ProfilePathLocked && len(portraitCandidates(profile)) > 0
+	canTryBio := needsBio && !detail.BiographyLocked
+	canTryImage := needsImage && !detail.ProfilePathLocked
+	if !canTryBio && !canTryImage {
+		printExistingFieldSkip(detail, hasBio, hasImage, o.overwrite)
+		return nil
+	}
+	profile := cachedScrape(ctx, providers, name, o.cache, o.refresh)
+	if profile == nil || len(portraitCandidates(profile)) == 0 && profile.Biography == "" {
+		wanted := make([]string, 0, 2)
+		if canTryImage {
+			wanted = append(wanted, "头像")
+		}
+		if canTryBio {
+			wanted = append(wanted, "简介")
+		}
+		fmt.Printf("  来源未找到可用%s；已有字段保持不变\n", strings.Join(wanted, "和"))
+		return nil
+	}
+	canBio := canTryBio && strings.TrimSpace(profile.Biography) != ""
+	canImage := canTryImage && len(portraitCandidates(profile)) > 0
 	if !canBio && !canImage {
 		printNoWritableFields(detail, profile, hasBio, hasImage, o.overwrite)
 		return nil
@@ -366,6 +379,21 @@ func printNoWritableFields(detail FnPerson, profile *ActorProfile, hasBio, hasIm
 		return
 	}
 	fmt.Printf("  跳过：没有可写入的缺失字段（%s）\n", strings.Join(blocked, "；"))
+}
+
+func printExistingFieldSkip(detail FnPerson, hasBio, hasImage, overwrite bool) {
+	blocked := make([]string, 0, 2)
+	if detail.BiographyLocked {
+		blocked = append(blocked, "简介字段已锁定")
+	} else if hasBio && !overwrite {
+		blocked = append(blocked, "简介已有内容")
+	}
+	if detail.ProfilePathLocked {
+		blocked = append(blocked, "头像字段已锁定")
+	} else if hasImage && !overwrite {
+		blocked = append(blocked, "头像已有内容")
+	}
+	fmt.Printf("  跳过：没有缺失且未锁定的可写字段（%s）\n", strings.Join(blocked, "；"))
 }
 
 func biographyBlockReason(detail FnPerson, profile *ActorProfile, exists, overwrite bool) string {
