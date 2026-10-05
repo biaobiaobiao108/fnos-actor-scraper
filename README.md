@@ -167,7 +167,7 @@ docker compose run --rm fnactor --actor '三上悠亚' --overwrite --apply
 - 使用标准库 `net/http`、`encoding/json`、`encoding/xml` 访问结构化资料来源。
 - 使用 `modernc.org/sqlite` 只读访问飞牛影视 `person` 表。
 - 使用 `golang.org/x/image/webp` 和标准库 JPEG 解码器处理头像，转换为 640×960 JPEG 后经飞牛 API 上传。
-- 在线来源包括 Gfriends、Wikipedia 和 Wikidata。头像优先采用 Gfriends，缺失时使用 Wikipedia/Wikidata 图片；简介优先采用 Wikipedia，其次 Wikidata。缓存存放在 `/config`。
+- 在线来源包括 Gfriends、JavDB、Wikipedia 和 Wikidata。头像优先采用 Gfriends，其次为 JavDB 演员搜索卡片头像，再回退到 Wikipedia/Wikidata 图片；简介优先采用 Wikipedia，其次 Wikidata。JavDB 只按精确演员名/别名匹配，不采信占位头像；它不提供可靠简介。缓存存放在 `/config`。
 - 飞牛 API 是其 Web 前端使用的内部接口，飞牛版本升级时可能变化；请求会附带前端客户端标识和签名，版本变化时需对照 NAS 前端资源核验。
 
 详细架构、接口、部署配置与故障排查见[实现与架构](docs/ARCHITECTURE.md)和[接口与使用说明](docs/INTERFACES.md)。项目协作规范见 [AGENTS.md](AGENTS.md)。

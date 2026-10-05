@@ -11,23 +11,24 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/PuerkitoBio/goquery"
 )
 
 const gfriendsTreeURL = "https://cdn.jsdelivr.net/gh/gfriends/gfriends@master/Filetree.json"
+const javDBBaseURL = "https://javdb570.com"
 
 type ProviderService struct {
-	upstream   *Upstream
-	cacheDir   string
-	refresh    bool
-	treeOnce   sync.Once
-	tree       map[string]any
-	treeErr    error
-	disabledMu sync.Mutex
-	disabled   map[string]bool
+	upstream *Upstream
+	cacheDir string
+	refresh  bool
+	treeOnce sync.Once
+	tree     map[string]any
+	treeErr  error
 }
 
 func NewProviderService(upstream *Upstream, cacheDir string, refresh bool) *ProviderService {
-	return &ProviderService{upstream: upstream, cacheDir: cacheDir, refresh: refresh, disabled: make(map[string]bool)}
+	return &ProviderService{upstream: upstream, cacheDir: cacheDir, refresh: refresh}
 }
 
 func (service *ProviderService) Scrape(ctx context.Context, name string) *ActorProfile {
@@ -36,14 +37,15 @@ func (service *ProviderService) Scrape(ctx context.Context, name string) *ActorP
 		name string
 		run  func() (*ActorProfile, error)
 	}{
-		// 头像优先级：Gfriends（针对 AV 演员的头像库）→ Wikipedia → Wikidata。
+		// 头像优先级：Gfriends → JavDB → Wikipedia → Wikidata。
 		// 简介优先级：Wikipedia → Wikidata；合并时保留各字段第一个非空值。
 		{"Gfriends", func() (*ActorProfile, error) { return service.scrapeGfriends(ctx, name) }},
+		{"JavDB", func() (*ActorProfile, error) { return scrapeJavDB(ctx, service.upstream, name) }},
 		{"Wikipedia", func() (*ActorProfile, error) { return scrapeWikipedia(ctx, service.upstream, name) }},
 		{"Wikidata", func() (*ActorProfile, error) { return scrapeWikidata(ctx, service.upstream, name) }},
 	}
 	for _, provider := range providers {
-		if service.isDisabled(provider.name) {
+		if provider.name == "JavDB" && hasProfileImage(profiles) {
 			continue
 		}
 		profile, err := provider.run()
@@ -77,20 +79,13 @@ func (service *ProviderService) Scrape(ctx context.Context, name string) *ActorP
 	return merged
 }
 
-func (service *ProviderService) isDisabled(name string) bool {
-	service.disabledMu.Lock()
-	defer service.disabledMu.Unlock()
-	return service.disabled[name]
-}
-
-func (service *ProviderService) disable(name string) bool {
-	service.disabledMu.Lock()
-	defer service.disabledMu.Unlock()
-	if service.disabled[name] {
-		return false
+func hasProfileImage(profiles []ActorProfile) bool {
+	for _, profile := range profiles {
+		if strings.TrimSpace(profile.ImageURL) != "" {
+			return true
+		}
 	}
-	service.disabled[name] = true
-	return true
+	return false
 }
 
 func scrapeWikidata(ctx context.Context, upstream *Upstream, name string) (*ActorProfile, error) {
@@ -295,6 +290,79 @@ func gfriendsRawURL(path string) string {
 		result += "?" + parts[1]
 	}
 	return result
+}
+
+func scrapeJavDB(ctx context.Context, upstream *Upstream, name string) (*ActorProfile, error) {
+	query := url.Values{"f": {"actor"}, "q": {name}}
+	searchURL := javDBBaseURL + "/search?" + query.Encode()
+	html, err := fetchText(ctx, upstream, searchURL)
+	if err != nil {
+		return nil, err
+	}
+	document, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err != nil {
+		return nil, err
+	}
+	type candidate struct {
+		pageURL, imageURL string
+		aliases           []string
+	}
+	candidates := make(map[string]candidate)
+	document.Find("a[href^='/actors/']").Each(func(_ int, selection *goquery.Selection) {
+		classes, _ := selection.Attr("class")
+		if containsExact(strings.Fields(classes), "navbar-item") {
+			return
+		}
+		aliases := strings.Split(selection.AttrOr("title", ""), ",")
+		if !containsExact(aliases, name) {
+			return
+		}
+		imageURL := selection.Find("img.avatar").First().AttrOr("src", "")
+		if imageURL == "" || strings.Contains(imageURL, "/images/actor_unknow.") {
+			return
+		}
+		pageURL, err := resolveJavDBURL(selection.AttrOr("href", ""))
+		if err != nil {
+			return
+		}
+		page, err := url.Parse(pageURL)
+		if err != nil || page.Hostname() != "javdb570.com" {
+			return
+		}
+		imageURL, err = resolveJavDBURL(imageURL)
+		if err != nil {
+			return
+		}
+		image, err := url.Parse(imageURL)
+		if err != nil || !isPublicHost(image.Hostname()) || (image.Hostname() != "jdbstatic.com" && !strings.HasSuffix(image.Hostname(), ".jdbstatic.com")) {
+			return
+		}
+		for index := range aliases {
+			aliases[index] = strings.TrimSpace(aliases[index])
+		}
+		candidates[pageURL] = candidate{pageURL: pageURL, imageURL: imageURL, aliases: unique(aliases)}
+	})
+	if len(candidates) != 1 {
+		return nil, nil
+	}
+	var match candidate
+	for _, match = range candidates {
+	}
+	return &ActorProfile{Name: name, Aliases: match.aliases, ImageURL: match.imageURL,
+		SourceURLs: []string{match.pageURL, match.imageURL}, SourceNames: []string{"JavDB"}}, nil
+}
+
+func resolveJavDBURL(value string) (string, error) {
+	target, err := url.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return "", err
+	}
+	base, _ := url.Parse(javDBBaseURL)
+	resolved := base.ResolveReference(target)
+	if resolved.Scheme != "https" || resolved.Hostname() == "" || !isPublicHost(resolved.Hostname()) {
+		return "", fmt.Errorf("JavDB 返回了不安全的链接")
+	}
+	return resolved.String(), nil
 }
 
 func scrapeWikipedia(ctx context.Context, upstream *Upstream, name string) (*ActorProfile, error) {

@@ -13,7 +13,7 @@
 - `modernc.org/sqlite` 以只读模式访问 FnOS 数据库，避免依赖 CGO。
 - `golang.org/x/image/webp` 与标准 JPEG 图像处理能力用于读取头像；统一转换为 640×960 JPEG。
 - FnOS API 客户端经飞牛影视内部 Web API 读取和保存人物档案。
-- 来源适配器获取 Gfriends、Wikipedia、Wikidata 资料；缓存放入 `/config/actors`。
+- 来源适配器获取 Gfriends、JavDB、Wikipedia、Wikidata 资料；缓存放入 `/config/actors`。
 
 ## 输入和候选人筛选
 
@@ -38,7 +38,7 @@ API 读取与保存的校验是第二道边界，不能只依赖本地数据库�
 
 ## 刮削与请求控制
 
-在线来源按字段优先级合并。头像依次优先采用 Gfriends、Wikipedia、Wikidata 的首个可用图片；简介依次优先采用 Wikipedia、Wikidata 的首个非空内容。来源查询和头像下载统一经过全局请求队列：默认串行，任意两次上游请求至少间隔 2 秒。演员任务并发默认 1、最高 2；多个演员的工作并发不能绕过全局请求限速。
+在线来源按字段优先级合并。头像依次优先采用 Gfriends、JavDB、Wikipedia、Wikidata 的首个可用图片；JavDB 要求搜索结果演员别名与输入名精确匹配并跳过站点占位图。简介依次优先采用 Wikipedia、Wikidata 的首个非空内容。来源查询和头像下载统一经过全局请求队列：默认串行，任意两次上游请求至少间隔 2 秒。演员任务并发默认 1、最高 2；多个演员的工作并发不能绕过全局请求限速。
 
 上游响应最大 16 MiB；超限时应边读边计数并中止，不应先完整缓冲再丢弃。遇到临时网络错误和常见 5xx 可有限重试，并遵从 `Retry-After`。遇到 403/429 应停止或降低速率，不得无限重试。
 
