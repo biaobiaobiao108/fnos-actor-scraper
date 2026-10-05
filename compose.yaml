@@ -4,10 +4,18 @@ services:
     build: .
     container_name: fnos-actor-scraper
     network_mode: host
+    env_file:
+      - .env
     environment:
       MEDIA_ROOT: /media
       CACHE_DIR: /config
+      FNOS_URL: ${FNOS_URL}
+      FNOS_USERNAME: ${FNOS_USERNAME}
+      FNOS_PASSWORD: ${FNOS_PASSWORD}
+      FNOS_TOKEN: ${FNOS_TOKEN:-}
     volumes:
-      - /mnt/CloudNAS/115open:/media:ro
+      # Mount only the actual FnOS library folder containing the movie/TV NFO files.
+      # Read-only is sufficient: the program never writes media or NFO files.
+      - ${MEDIA_HOST_PATH:-/path/to/fnos-library}:/media:ro
       - /mnt/docker_disk/fnos-actor-scraper:/config
     profiles: ["manual"]

@@ -1,67 +1,43 @@
 # 实现与架构
 
-## 处理流程
+## 目标和边界
 
-1. 从 CLI 参数或环境变量确定媒体根目录与缓存目录。
-2. 递归查找 `.nfo` 文件；跳过符号链接。
-3. 使用 XML parser 解析每个 NFO 的 `<actor>` 节点，读取首个 `<name>`。
-4. 通过 Unicode NFKC、转小写和去空格/标点归一化名称，并聚合演员出现次数及对应 NFO 路径。
-5. 为每个选中演员读取本地资料缓存。无缓存或 `--refresh` 时并行执行 Gfriends、Minnano-AV、Wikipedia provider。
-6. 合并成功来源中的别名、图片、简介及来源信息；当前字段优先顺序由 provider 调用顺序决定：Gfriends 的图片优先，其次 Minnano-AV、Wikipedia；有简介时优先 Minnano-AV，其次 Wikipedia。
-7. 默认仅打印预览。`--apply` 时逐个 NFO 补充缺少的 `<thumb>` 和 `<profile>`，写入前复制旁路备份。
+本程序运行在飞牛 OS 的 Docker 中，在线查询演员头像与简洁资料，并通过飞牛影视的内部 API 更新**中央演员档案**。同一个演员被多部影片引用时只处理一次，不需要改每部影片的 NFO。
 
-## 模块职责
+程序不创建演员档案、不修改媒体文件或 NFO，也不直接读写飞牛的 SQLite 数据库或私有图片目录。批量模式只读 NFO 以收集演员名称；真正的写入通过飞牛影视 API 完成。
 
-### `src/index.ts`
+## 保护规则
 
-CLI 入口和流程编排。负责参数读取、目录遍历、actor 去重、缓存读写、并行 provider 调度、字段合并、预览输出以及 NFO 更新。外部网络和文件系统错误按 actor/provider 级别处理；损坏 NFO 会被跳过。
+1. 只处理 `trim_id` 以 `LOCAL_PERSON_` 开头、没有 TMDb/IMDb ID 且 `is_official` 不为真的本地档案。在线元数据和飞牛官方档案一律跳过。
+2. 精确规范化匹配演员名称。没有唯一匹配或出现重名时跳过，不猜测、不新建档案。
+3. 默认只补缺失的头像和简介；头像/简介都已存在时自动跳过。重复运行因此不会反复覆盖。
+4. `--overwrite --apply` 允许覆盖本地档案已有头像/简介，但仍尊重飞牛字段锁定状态，并仍跳过官方或在线档案。
+5. 默认是预览；必须显式传 `--apply` 才调用飞牛写入接口。
 
-### `src/nfo.ts`
+## 数据流程
 
-基于 `@xmldom/xmldom` 解析和序列化 XML。`parseActors` 抽取演员元素和现有标签状态；`updateActor` 只新增缺失标签；`serializeNfo` 生成 XML 文本。
+1. `--actor` 提供单个演员名，或递归读取 `--root` 下 `.nfo` 中的 `<actor><name>`。不跟随符号链接，忽略坏 NFO。
+2. 规范化名称并去重，记录演员在 NFO 中出现次数。
+3. 登录 FnOS，精确搜索中央 `person` 记录并读取编辑详情。
+4. 对可更新的本地档案并行查询 Gfriends、Minnano-AV、Wikipedia；从来源合并头像和简介，缓存到 `/config/actors`。
+5. 头像下载后裁剪缩放到 640×960（2:3）并转 JPEG，以适配飞牛资料头像限制；图片经飞牛上传接口取得 `hash_path`。
+6. 预览显示计划更新字段。`--apply` 时只提交需要补齐/覆盖的字段，并保留字段锁定与名称等其他数据。
 
-### `src/providers/*`
+## 模块
 
-provider 将在线服务封装为 `Promise<ActorProfile | undefined>`。没有符合匹配阈值的候选时返回 `undefined`；请求失败时 reject，由调度器单独记录，不影响其他 provider。
+- `src/index.ts`：CLI、只读 NFO 遍历、去重、受保护档案筛选、缓存和更新编排。
+- `src/nfo.ts`：仅解析 XML 演员名称；没有 NFO 写入路径。
+- `src/fnos.ts`：FnOS 登录、演员搜索、编辑详情、图片上传和资料保存 API。
+- `src/image.ts`：限制 HTTPS 公网图片源，下载大小/超时限制，sharp 处理成飞牛头像格式。
+- `src/providers/*`：在线演员信息来源；来源不可用时互相隔离。
+- `src/util.ts`：名称归一化、相似度及 HTTP helper。
 
-### `src/util.ts`
+## FnOS 兼容性
 
-提供名称归一化、字符相似度、字符串去重、文本清理，以及统一的带 10 秒请求超时的 HTTP helper。
+FnOS 没有公开稳定的演员编辑 API；程序使用飞牛影视 Web 界面当前调用的 `/v/api/v1` 接口。接口可能随 FnOS 更新变化。若搜索/保存结构发生变化，程序会报 API 错误而停止当前流程，不会回退到直接修改数据库。建议先用默认预览确认匹配，再对少量演员使用 `--apply`。
 
-## Provider 行为
+用户名和密码仅用于登录，密码按飞牛 Web 客户端的 SHA-256 规则发送；整个 API 地址应使用 HTTPS。不要把 `.env` 提交到仓库。
 
-### Gfriends
+## 镜像
 
-从 jsDelivr 获取 Gfriends `Filetree.json`。成功下载后写入 `CACHE_DIR/gfriends-filetree.json`；有效期 24 小时。遍历索引，跳过 `Information` 元数据分支，以归一化文件名精确匹配演员名。图片 URL 使用 `raw.githubusercontent.com`。目前不模糊匹配，不读取 Gfriends 的其他演员资料字段。
-
-### Minnano-AV
-
-构造女优搜索请求，解析 HTML 中的 `actressNNNN.html` 候选链接。候选标签/上下文与输入名通过 `nameSimilarity` 比较；长度不少于 4 个字符时阈值为 0.7，否则要求完全匹配。通过后打开资料页，提取头像、链接别名以及 profile 表格中的公开资料字段，合并成简介字符串。
-
-### Wikipedia
-
-依次请求中文和日文 MediaWiki API `action=query&generator=search`，每种语言最多取 5 个页面并获取 intro extract 与 thumbnail。使用相同名称相似度逻辑选最高分页面；得到简介或图片之一即视为命中。中文命中后不再继续查询日文版。
-
-## 缓存设计
-
-- Gfriends 文件树：固定文件名，依据文件修改时间判断 24 小时过期。
-- 演员资料：以原始演员名称 UTF-8 内容的 SHA-256 作为文件名，存于 `CACHE_DIR/actors/<hash>.json`。
-- 演员资料缓存没有自动过期策略；`--refresh` 忽略演员缓存并重查，同时强制刷新 Gfriends 索引。
-- 缓存是可重建数据，可以安全删除；删除不会影响媒体 NFO。
-
-## Docker 镜像
-
-Dockerfile 使用两个 `oven/bun:alpine` 阶段：
-
-1. Build 阶段通过锁文件安装依赖，`bun build --target=bun` 将源码及运行依赖打包为 `dist/index.js`。
-2. Runtime 阶段只复制 bundle 并使用 Bun 执行入口。源码、node_modules、编译工具链不进入最终镜像。
-
-workflow 使用 Buildx 输出 `linux/amd64` 和 `linux/arm64` manifest 到 GHCR。iStoreOS 当前运行时使用 Docker host 网络，以沿用宿主机的外网通路。
-
-## 写入边界
-
-- 只处理解析成功的 `.nfo` 文件。
-- 不处理文件名以外的媒体内容、不读取或上传媒体文件。
-- 仅为已命中的演员节点补空缺标签；已有 `<thumb>`、`<profile>` 不覆盖。
-- 备份只在不存在时创建，避免覆盖首次备份。
-- XML serializer 可能规范化格式；写入前应先预览，重要资料建议另行备份媒体目录。
+构建和运行阶段均基于 `oven/bun:alpine`。构建阶段打包 TypeScript；运行阶段安装 sharp 及生产依赖，以保证其原生 Alpine/CPU 架构模块存在。GitHub Actions 生成 `linux/amd64` 和 `linux/arm64` 镜像并推送 GHCR。
