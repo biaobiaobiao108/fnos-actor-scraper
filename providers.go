@@ -18,27 +18,35 @@ import (
 const gfriendsTreeURL = "https://cdn.jsdelivr.net/gh/gfriends/gfriends@master/Filetree.json"
 
 type ProviderService struct {
-	upstream *Upstream
-	cacheDir string
-	refresh  bool
-	treeOnce sync.Once
-	tree     map[string]any
-	treeErr  error
+	upstream  *Upstream
+	cacheDir  string
+	refresh   bool
+	tpdbToken string
+	treeOnce  sync.Once
+	tree      map[string]any
+	treeErr   error
 }
 
 func NewProviderService(upstream *Upstream, cacheDir string, refresh bool) *ProviderService {
-	return &ProviderService{upstream: upstream, cacheDir: cacheDir, refresh: refresh}
+	return &ProviderService{upstream: upstream, cacheDir: cacheDir, refresh: refresh, tpdbToken: strings.TrimSpace(os.Getenv("TPDB_API_TOKEN"))}
 }
 
 func (service *ProviderService) Scrape(ctx context.Context, name string) *ActorProfile {
-	profiles := make([]ActorProfile, 0, 3)
+	profiles := make([]ActorProfile, 0, 5)
 	providers := []struct {
 		name string
 		run  func() (*ActorProfile, error)
 	}{
 		{"Gfriends", func() (*ActorProfile, error) { return service.scrapeGfriends(ctx, name) }},
 		{"Minnano-AV", func() (*ActorProfile, error) { return scrapeMinnano(ctx, service.upstream, name) }},
+		{"ThePornDB", func() (*ActorProfile, error) {
+			if service.tpdbToken == "" {
+				return nil, nil
+			}
+			return scrapeThePornDB(ctx, service.upstream, service.tpdbToken, name)
+		}},
 		{"Wikipedia", func() (*ActorProfile, error) { return scrapeWikipedia(ctx, service.upstream, name) }},
+		{"Wikidata", func() (*ActorProfile, error) { return scrapeWikidata(ctx, service.upstream, name) }},
 	}
 	for _, provider := range providers {
 		profile, err := provider.run()
@@ -70,6 +78,175 @@ func (service *ProviderService) Scrape(ctx context.Context, name string) *ActorP
 	}
 	merged.Aliases, merged.SourceURLs, merged.SourceNames = unique(merged.Aliases), unique(merged.SourceURLs), unique(merged.SourceNames)
 	return merged
+}
+
+func scrapeWikidata(ctx context.Context, upstream *Upstream, name string) (*ActorProfile, error) {
+	type searchItem struct {
+		ID      string   `json:"id"`
+		Label   string   `json:"label"`
+		Aliases []string `json:"aliases"`
+	}
+	var matched []searchItem
+	for _, language := range []string{"zh", "ja", "en"} {
+		query := url.Values{"action": {"wbsearchentities"}, "search": {name}, "language": {language}, "format": {"json"}, "limit": {"5"}}
+		address := "https://www.wikidata.org/w/api.php?" + query.Encode()
+		body, err := upstream.Get(ctx, address, map[string]string{
+			"Accept": "application/json", "User-Agent": "fnactor/0.5 (https://github.com/biaobiaobiao108/fnos-actor-scraper)",
+		}, defaultBodyLimit)
+		if err != nil {
+			if language == "en" {
+				return nil, err
+			}
+			continue
+		}
+		var response struct {
+			Search []searchItem `json:"search"`
+		}
+		if err := json.Unmarshal(body, &response); err != nil {
+			return nil, err
+		}
+		matched = matched[:0]
+		for _, candidate := range response.Search {
+			if normalizeName(candidate.Label) == normalizeName(name) || containsExact(candidate.Aliases, name) {
+				matched = append(matched, candidate)
+			}
+		}
+		if len(matched) > 0 {
+			break
+		}
+	}
+	entities := make(map[string]searchItem, len(matched))
+	for _, candidate := range matched {
+		if candidate.ID != "" {
+			entities[candidate.ID] = candidate
+		}
+	}
+	if len(entities) != 1 {
+		return nil, nil
+	}
+	var candidate searchItem
+	for _, candidate = range entities {
+	}
+	entityURL := "https://www.wikidata.org/wiki/Special:EntityData/" + url.PathEscape(candidate.ID) + ".json"
+	body, err := upstream.Get(ctx, entityURL, map[string]string{
+		"Accept": "application/json", "User-Agent": "fnactor/0.5 (https://github.com/biaobiaobiao108/fnos-actor-scraper)",
+	}, defaultBodyLimit)
+	if err != nil {
+		return nil, err
+	}
+	var response struct {
+		Entities map[string]struct {
+			Descriptions map[string]struct {
+				Value string `json:"value"`
+			} `json:"descriptions"`
+			Aliases map[string][]struct {
+				Value string `json:"value"`
+			} `json:"aliases"`
+			Claims map[string][]struct {
+				MainSnak struct {
+					DataValue struct {
+						Value json.RawMessage `json:"value"`
+					} `json:"datavalue"`
+				} `json:"mainsnak"`
+			} `json:"claims"`
+		} `json:"entities"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, err
+	}
+	entity, exists := response.Entities[candidate.ID]
+	if !exists {
+		return nil, nil
+	}
+	biography := ""
+	for _, language := range []string{"zh", "ja", "en"} {
+		if value := strings.TrimSpace(entity.Descriptions[language].Value); value != "" {
+			biography = value
+			break
+		}
+	}
+	filename := ""
+	if statements := entity.Claims["P18"]; len(statements) > 0 {
+		_ = json.Unmarshal(statements[0].MainSnak.DataValue.Value, &filename)
+	}
+	imageURL := ""
+	if filename != "" {
+		imageURL = "https://commons.wikimedia.org/wiki/Special:FilePath/" + url.PathEscape(filename)
+	}
+	aliases := make([]string, 0, len(entity.Aliases["zh"])+len(entity.Aliases["ja"])+1)
+	if candidate.Label != name {
+		aliases = append(aliases, candidate.Label)
+	}
+	for _, language := range []string{"zh", "ja", "en"} {
+		for _, alias := range entity.Aliases[language] {
+			aliases = append(aliases, alias.Value)
+		}
+	}
+	sourceURLs := []string{"https://www.wikidata.org/wiki/" + candidate.ID}
+	if filename != "" {
+		sourceURLs = append(sourceURLs, "https://commons.wikimedia.org/wiki/File:"+url.PathEscape(filename))
+	}
+	if biography == "" && imageURL == "" {
+		return nil, nil
+	}
+	return &ActorProfile{Name: name, Aliases: unique(aliases), ImageURL: imageURL, Biography: biography,
+		SourceURLs: sourceURLs, SourceNames: []string{"Wikidata"}}, nil
+}
+
+func containsExact(values []string, expected string) bool {
+	for _, value := range values {
+		if normalizeName(value) == normalizeName(expected) {
+			return true
+		}
+	}
+	return false
+}
+
+type tpdbPerformer struct {
+	Name      string   `json:"name"`
+	Slug      string   `json:"slug"`
+	Bio       string   `json:"bio"`
+	Aliases   []string `json:"aliases"`
+	Image     string   `json:"image"`
+	Thumbnail string   `json:"thumbnail"`
+	Face      string   `json:"face"`
+}
+
+func scrapeThePornDB(ctx context.Context, upstream *Upstream, token, name string) (*ActorProfile, error) {
+	query := url.Values{"q": {name}, "per_page": {"10"}}
+	address := "https://api.theporndb.net/performers?" + query.Encode()
+	body, err := upstream.Get(ctx, address, map[string]string{
+		"Accept": "application/json", "Authorization": "Bearer " + token,
+	}, defaultBodyLimit)
+	if err != nil {
+		return nil, err
+	}
+	var response struct {
+		Data []tpdbPerformer `json:"data"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, err
+	}
+	matches := make([]tpdbPerformer, 0, 1)
+	for _, candidate := range response.Data {
+		if normalizeName(candidate.Name) == normalizeName(name) || containsExact(candidate.Aliases, name) {
+			matches = append(matches, candidate)
+		}
+	}
+	if len(matches) != 1 {
+		return nil, nil
+	}
+	candidate := matches[0]
+	imageURL := firstNonempty(candidate.Face, candidate.Image, candidate.Thumbnail)
+	if imageURL == "" && strings.TrimSpace(candidate.Bio) == "" {
+		return nil, nil
+	}
+	sourceURL := address
+	if candidate.Slug != "" {
+		sourceURL = "https://theporndb.net/performers/" + url.PathEscape(candidate.Slug)
+	}
+	return &ActorProfile{Name: name, Aliases: unique(candidate.Aliases), ImageURL: imageURL,
+		Biography: strings.TrimSpace(candidate.Bio), SourceURLs: []string{sourceURL}, SourceNames: []string{"ThePornDB"}}, nil
 }
 
 func (service *ProviderService) loadGfriendsTree(ctx context.Context) (map[string]any, error) {

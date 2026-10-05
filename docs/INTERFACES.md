@@ -63,6 +63,7 @@ docker compose run --rm fnactor --actor '三上悠亚' --overwrite --apply
 | `FNOS_USERNAME` | 与密码配合 | 飞牛登录用户名 |
 | `FNOS_PASSWORD` | 与用户名配合 | 飞牛登录密码；仅保存在秘密配置中 |
 | `FNOS_TOKEN` | 可选 | 当前有效的飞牛 API token；如果设置则使用有效 token 认证 |
+| `TPDB_API_TOKEN` | 可选 | ThePornDB performer API token；没有配置时跳过该来源 |
 | `FNOS_DB_PATH` | 批量模式需要 | 容器内数据库文件路径，Compose 默认 `/fnos-db/trimmedia.db` |
 | `CACHE_DIR` | 否 | 在线来源缓存根目录，默认 `/config` |
 | `UPSTREAM_DELAY_MS` | 否 | 公网上游最小请求间隔，默认 2000 毫秒；请求仍经过全局串行队列 |
@@ -125,7 +126,7 @@ volumes:
 
 接口参数和响应以当前飞牛前端实现为准；它们不是公开稳定 API。程序必须在保存前重新校验档案保护状态。升级后若请求失败，应核对新版前端调用，不要绕过 API 写数据库。
 
-在线资料来源包括 Gfriends、Minnano-AV、Wikipedia 中文和日文。HTML 使用 goquery 解析；结构化接口使用 Go 标准库 JSON/XML。头像只从允许的 HTTPS 来源下载，通过格式、字节数和像素数检查后再上传。
+在线资料来源包括 Gfriends、Minnano-AV、Wikipedia 和 Wikidata。ThePornDB 提供额外演员简介与头像，但需要单独的 `TPDB_API_TOKEN`。HTML 使用 goquery 解析；结构化接口使用 Go 标准库 JSON/XML。头像只从允许的 HTTPS 来源下载，通过格式、字节数和像素数检查后再上传。MDC-NG 也列有 Graphis 演员来源；Graphis 页面明确限制未经授权转载其图片，因此本项目不复制该站图片。
 
 ## 故障排查
 
