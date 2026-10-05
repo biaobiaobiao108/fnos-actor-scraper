@@ -10,6 +10,8 @@ WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --production --frozen-lockfile
 COPY --from=build /tmp/dist/index.js ./index.js
+COPY bin/fnactor ./bin/fnactor
+RUN chmod +x ./bin/fnactor
 ENV MEDIA_ROOT=/media
 ENV CACHE_DIR=/config
-ENTRYPOINT ["bun", "index.js"]
+ENTRYPOINT ["/app/bin/fnactor"]

@@ -4,8 +4,12 @@
   "description": "TypeScript + Bun CLI to enrich local actor profiles in FnOS Media",
   "private": true,
   "type": "module",
+  "bin": {
+    "fnactor": "./bin/fnactor"
+  },
   "scripts": {
     "start": "bun src/index.ts",
+    "fnactor": "bun src/index.ts",
     "build": "bun build src/index.ts --target=bun --outdir dist"
   },
   "dependencies": {

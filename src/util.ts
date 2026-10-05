@@ -19,10 +19,87 @@ export function unique(values: string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
+let upstreamQueue: Promise<void> = Promise.resolve();
+
+function upstreamDelayMs(): number {
+  const configured = Number(process.env.UPSTREAM_DELAY_MS || 2_000);
+  if (!Number.isFinite(configured)) return 2_000;
+  return Math.max(500, Math.min(60_000, Math.floor(configured)));
+}
+
+function retryAfterMs(response: Response, attempt: number): number {
+  const value = response.headers.get("retry-after");
+  if (value) {
+    const seconds = Number(value);
+    const dateDelay = Date.parse(value) - Date.now();
+    const delay = Number.isFinite(seconds) ? seconds * 1_000 : dateDelay;
+    if (Number.isFinite(delay) && delay > 0) return Math.min(delay, 60_000);
+  }
+  return Math.min(1_000 * 2 ** attempt, 15_000);
+}
+
+async function readResponseBody(response: Response, maxBytes: number): Promise<ArrayBuffer | null> {
+  if (!response.body) return null;
+  const declared = Number(response.headers.get("content-length") || 0);
+  if (declared > maxBytes) {
+    await response.body.cancel();
+    throw new Error(`上游响应超过 ${maxBytes} 字节限制`);
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new Error(`上游响应超过 ${maxBytes} 字节限制`);
+    }
+    chunks.push(value);
+  }
+  const buffer = new ArrayBuffer(total);
+  const output = new Uint8Array(buffer);
+  let offset = 0;
+  for (const chunk of chunks) { output.set(chunk, offset); offset += chunk.byteLength; }
+  return buffer;
+}
+
+/** Serialize upstream HTTP calls, spacing each request and backing off on throttling/server errors. */
+export function fetchUpstream(url: string | URL, init: RequestInit = {}, maxBodyBytes = 25 * 1024 * 1024): Promise<Response> {
+  const run = async (): Promise<Response> => {
+    const delay = upstreamDelayMs();
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await Bun.sleep(delay);
+      let response: Response;
+      try {
+        response = await fetch(url, init);
+      } catch (error) {
+        if (attempt === 2) throw error;
+        await Bun.sleep(Math.min(1_000 * 2 ** attempt, 15_000));
+        continue;
+      }
+      if (![429, 500, 502, 503, 504].includes(response.status) || attempt === 2) {
+        const body = [204, 205, 304].includes(response.status) ? null : await readResponseBody(response, maxBodyBytes);
+        return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+      }
+      const waitMs = retryAfterMs(response, attempt);
+      await response.body?.cancel();
+      console.warn(`上游返回 HTTP ${response.status}，等待 ${Math.ceil(waitMs / 1_000)} 秒后重试`);
+      await Bun.sleep(waitMs);
+    }
+    throw new Error("上游请求重试次数已耗尽");
+  };
+
+  const result = upstreamQueue.then(run, run);
+  upstreamQueue = result.then(() => undefined, () => undefined);
+  return result;
+}
+
 export async function fetchText(url: string): Promise<string> {
-  const response = await fetch(url, {
+  const response = await fetchUpstream(url, {
     headers: {
-      "user-agent": "FnOS-Actor-Scraper/0.1 (+local media metadata utility)",
+      "user-agent": "FnOS-Actor-Scraper/0.2 (+local media metadata utility)",
       accept: "text/html,application/json;q=0.9,*/*;q=0.8",
     },
     signal: AbortSignal.timeout(10_000),
@@ -32,9 +109,9 @@ export async function fetchText(url: string): Promise<string> {
 }
 
 export async function fetchJson<T>(url: string, timeoutMs = 10_000): Promise<T> {
-  const response = await fetch(url, {
+  const response = await fetchUpstream(url, {
     headers: {
-      "user-agent": "FnOS-Actor-Scraper/0.1 (+local media metadata utility)",
+      "user-agent": "FnOS-Actor-Scraper/0.2 (+local media metadata utility)",
       accept: "application/json",
     },
     signal: AbortSignal.timeout(timeoutMs),

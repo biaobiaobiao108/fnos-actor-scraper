@@ -3,7 +3,7 @@
 ## CLI
 
 ```text
-fnos-actor-scraper [--actor NAME | --root DIR] [--cache DIR] [--limit N] [--refresh] [--apply] [--overwrite]
+fnactor [--actor NAME | --root DIR] [--cache DIR] [--limit N] [--concurrency N] [--refresh] [--apply] [--overwrite]
 ```
 
 | 参数 | 默认值 | 说明 |
@@ -12,6 +12,7 @@ fnos-actor-scraper [--actor NAME | --root DIR] [--cache DIR] [--limit N] [--refr
 | `--root DIR` | `MEDIA_ROOT` 或 `/media` | 批量扫描 NFO 的目录，只读 |
 | `--cache DIR` | `CACHE_DIR` 或 `/config` | 在线资料缓存目录，应持久化 |
 | `--limit N` | `0` | 最多处理数量；0 表示不限 |
+| `--concurrency N` | `1` | 同时处理演员数，最大为 3 |
 | `--refresh` | 关闭 | 忽略该演员资料缓存并重新抓取在线来源 |
 | `--apply` | 关闭 | 实际更新飞牛影视中央演员档案；缺省只预览 |
 | `--overwrite` | 关闭 | 配合 `--apply` 覆盖已有头像/简介；官方资料和锁定字段仍受保护 |
@@ -21,16 +22,16 @@ fnos-actor-scraper [--actor NAME | --root DIR] [--cache DIR] [--limit N] [--refr
 
 ```sh
 # 单人预览，不需要挂媒体目录
-docker compose run --rm fnos-actor-scraper --actor '三上悠亚'
+docker compose run --rm fnactor --actor '三上悠亚'
 
 # 首次建议小批量预览
-docker compose run --rm fnos-actor-scraper --limit 5
+docker compose run --rm fnactor --limit 5
 
 # 确认匹配后写入缺少的字段
-docker compose run --rm fnos-actor-scraper --limit 5 --apply
+docker compose run --rm fnactor --limit 5 --apply
 
 # 强制刷新来源并覆盖本地档案已存在的头像/简介
-docker compose run --rm fnos-actor-scraper --actor '三上悠亚' --refresh --overwrite --apply
+docker compose run --rm fnactor --actor '三上悠亚' --refresh --overwrite --apply
 ```
 
 ## Docker 部署（飞牛 OS）
@@ -68,7 +69,7 @@ Compose 使用 host 网络，便于容器访问飞牛本机 Web API 和网络。
 ghcr.io/biaobiaobiao108/fnos-actor-scraper:latest
 ```
 
-该容器是按需运行的 CLI，不是常驻服务。Compose 配置使用 `manual` profile，避免它随开机自动运行。可使用 `docker compose run --rm fnos-actor-scraper ...` 执行。
+该容器是按需运行的 CLI，不是常驻服务。Compose 配置使用 `manual` profile，避免它随开机自动运行。可使用 `docker compose run --rm fnactor ...` 执行。容器内入口命令也叫 `fnactor`。
 
 ### 重要行为
 
@@ -88,6 +89,13 @@ ghcr.io/biaobiaobiao108/fnos-actor-scraper:latest
 | `FNOS_TOKEN` | 二选一 | 当前有效 API token；优先于用户名/密码 |
 | `MEDIA_ROOT` | 否 | NFO 扫描根目录，默认 `/media` |
 | `CACHE_DIR` | 否 | 缓存目录，默认 `/config` |
+| `UPSTREAM_DELAY_MS` | 否 | 上游请求最小间隔，默认 2000 毫秒，范围 500–60000 毫秒 |
+
+## 批量并发与请求速度
+
+批量模式默认每次处理一个演员。`--concurrency 2` 或 `--concurrency 3` 可同时处理多个演员；最大为 3。所有在线资料及头像 HTTP 请求共用全局队列，同一时间最多一个请求在途，每次请求前至少等待 2 秒。理论上不超过每分钟 30 次，实际速度通常更慢，因为等待响应的时间也计入间隔。
+
+HTTP 429、500、502、503、504 和网络失败会退避重试，最多尝试 3 次，并优先遵从 `Retry-After`。建议保留默认的 2000 毫秒间隔；若来源返回 429/403，停止批处理，将 `UPSTREAM_DELAY_MS` 提高到 5000–10000 后再续跑。缓存命中的演员不会再次请求资料来源；`--refresh` 会绕过资料缓存，应谨慎用于全库批处理。
 
 ## 内部 HTTP 接口
 

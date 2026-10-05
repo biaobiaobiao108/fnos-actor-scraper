@@ -1,4 +1,5 @@
 import sharp from "sharp";
+import { fetchUpstream } from "./util.ts";
 
 const MAX_DOWNLOAD = 10 * 1024 * 1024;
 const MAX_UPLOAD = 4 * 1024 * 1024;
@@ -16,7 +17,7 @@ function isPublicHost(host: string): boolean {
 export async function fetchPortrait(urlText: string): Promise<Uint8Array> {
   const url = new URL(urlText);
   if (url.protocol !== "https:" || !isPublicHost(url.hostname)) throw new Error("头像地址必须是公网 HTTPS 地址");
-  const response = await fetch(url, { redirect: "error", signal: AbortSignal.timeout(20_000), headers: { "user-agent": "FnOS-Actor-Scraper/0.2", accept: "image/*" } });
+  const response = await fetchUpstream(url, { redirect: "error", signal: AbortSignal.timeout(20_000), headers: { "user-agent": "FnOS-Actor-Scraper/0.2", accept: "image/*" } }, MAX_DOWNLOAD);
   if (!response.ok) throw new Error(`头像下载失败：HTTP ${response.status}`);
   const declared = Number(response.headers.get("content-length") || 0);
   if (declared > MAX_DOWNLOAD) throw new Error("头像原图超过 10 MiB 限制");

@@ -1,4 +1,4 @@
-# FnOS Actor Scraper
+# fnactor
 
 通过在线数据源补全飞牛影视中的**本地演员中央档案**，包括头像和简洁简介。程序用 TypeScript + Bun 编写，支持飞牛 OS Docker、`amd64` 和 `arm64`。
 
@@ -35,8 +35,8 @@
 4. 执行预览，再小批量写入：
 
    ```sh
-   docker compose run --rm fnos-actor-scraper --limit 5
-   docker compose run --rm fnos-actor-scraper --limit 5 --apply
+   docker compose run --rm fnactor --limit 5
+   docker compose run --rm fnactor --limit 5 --apply
    ```
 
 容器使用 host 网络以访问飞牛 Web API；该工具按需运行，不是常驻服务。Compose 默认放在 `manual` profile，不会开机自动跑。
@@ -44,21 +44,21 @@
 ## 用法
 
 ```text
-fnos-actor-scraper [--actor NAME | --root DIR] [--cache DIR] [--limit N] [--refresh] [--apply] [--overwrite]
+fnactor [--actor NAME | --root DIR] [--cache DIR] [--limit N] [--concurrency N] [--refresh] [--apply] [--overwrite]
 ```
 
 ```sh
 # 单人预览
-docker compose run --rm fnos-actor-scraper --actor '三上悠亚'
+docker compose run --rm fnactor --actor '三上悠亚'
 
 # 预览媒体库内前 5 个演员；NFO 只读
-docker compose run --rm fnos-actor-scraper --limit 5
+docker compose run --rm fnactor --limit 5
 
 # 确认目标后补全飞牛演员档案
-docker compose run --rm fnos-actor-scraper --limit 5 --apply
+docker compose run --rm fnactor --limit 5 --apply
 
 # 刷新来源，并覆盖本地档案已有头像/简介
-docker compose run --rm fnos-actor-scraper --actor '三上悠亚' --refresh --overwrite --apply
+docker compose run --rm fnactor --actor '三上悠亚' --refresh --overwrite --apply
 ```
 
 | 参数 | 说明 |
@@ -67,11 +67,18 @@ docker compose run --rm fnos-actor-scraper --actor '三上悠亚' --refresh --ov
 | `--root DIR` | 批量扫描 NFO 根目录，默认 `/media` |
 | `--cache DIR` | 缓存目录，默认 `/config` |
 | `--limit N` | 限制处理演员数；0 表示不限 |
+| `--concurrency N` | 同时处理演员数，默认 1，允许 1–3 |
 | `--refresh` | 忽略资料缓存并重新查询来源 |
 | `--apply` | 实际写飞牛演员中央档案；缺省为预览 |
 | `--overwrite` | 覆盖本地档案已有字段，必须搭配 `--apply` |
 
 环境变量：`FNOS_URL`、`FNOS_USERNAME`、`FNOS_PASSWORD` 或 `FNOS_TOKEN`、`MEDIA_ROOT`、`CACHE_DIR`。建议 `FNOS_URL` 使用 HTTPS 和有效证书。
+
+### 批量速度与上游限流
+
+当前版本支持批量处理 NFO 中收集到的演员。默认 `--concurrency 1`，按演员逐个处理；来源请求由全局队列串行发送，默认请求间隔至少 2 秒（理论上不超过 30 次/分钟，通常更慢，因为还会等待响应）。头像下载也经过同一限速队列。遇到 HTTP 429 或服务端错误会按 `Retry-After`/退避策略重试，最多 3 次尝试。
+
+通常不需要调高并发。`--concurrency 2` 或 `3` 只增加同时处理的演员数，不会并发轰炸来源，因为所有在线资料和头像请求仍受全局队列限制。`UPSTREAM_DELAY_MS` 可设置请求最小间隔，默认 2000 毫秒，代码将其限制在 500–60000 毫秒。建议保持默认值；若来源出现 429/403，应暂停批量任务并把间隔提高到 5000–10000 毫秒，稍后再继续。
 
 ## 来源与处理
 
@@ -85,7 +92,7 @@ docker compose run --rm fnos-actor-scraper --actor '三上悠亚' --refresh --ov
 
 ```sh
 bun install --frozen-lockfile
-bun run start -- --help
+bun run fnactor -- --help
 bun run build
 ```
 

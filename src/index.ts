@@ -10,11 +10,11 @@ import { scrapeWikipedia } from "./providers/wikipedia.ts";
 import type { ActorProfile, FnPerson } from "./types.ts";
 import { normalizeName, unique } from "./util.ts";
 
-interface Options { root: string; cache: string; actor?: string; limit: number; apply: boolean; overwrite: boolean; refresh: boolean; }
-const help = `FnOS Actor Scraper — 补全飞牛影视中的本地演员档案
+interface Options { root: string; cache: string; actor?: string; limit: number; concurrency: number; apply: boolean; overwrite: boolean; refresh: boolean; }
+const help = `fnactor — 补全飞牛影视中的本地演员档案
 
 用法：
-  bun src/index.ts [--actor 演员名 | --root NFO目录] [--apply] [--overwrite] [--refresh]
+  fnactor [--actor 演员名 | --root NFO目录] [--limit 数量] [--concurrency 数量] [--apply] [--overwrite] [--refresh]
 
 默认只预览，不写入飞牛资料。实际更新必须显式传 --apply。
 批量模式仅读取媒体库 NFO 收集演员名称，不修改 NFO/媒体文件。
@@ -24,28 +24,30 @@ const help = `FnOS Actor Scraper — 补全飞牛影视中的本地演员档案
   --root DIR       NFO 扫描目录（默认 MEDIA_ROOT 或 /media）
   --cache DIR      缓存目录（默认 CACHE_DIR 或 /config）
   --limit N        最多处理 N 个演员，0 表示不限制
+  --concurrency N  同时处理的演员数，默认 1，最大 3
   --apply          将缺少的头像/简介写入飞牛影视本地演员档案
   --overwrite      覆盖已有头像/简介（仍跳过飞牛官方资料及锁定字段）
   --refresh        忽略演员资料缓存并重新查询来源
   --help           显示帮助
 
-环境变量：FNOS_URL、FNOS_USERNAME、FNOS_PASSWORD（或 FNOS_TOKEN）。`;
+环境变量：FNOS_URL、FNOS_USERNAME、FNOS_PASSWORD（或 FNOS_TOKEN）、UPSTREAM_DELAY_MS（默认 2000）。`;
 
 function optionsFromArgs(args: string[]): Options {
-  const options: Options = { root: process.env.MEDIA_ROOT || "/media", cache: process.env.CACHE_DIR || "/config", limit: 0, apply: false, overwrite: false, refresh: false };
+  const options: Options = { root: process.env.MEDIA_ROOT || "/media", cache: process.env.CACHE_DIR || "/config", limit: 0, concurrency: 1, apply: false, overwrite: false, refresh: false };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     if (arg === "--help" || arg === "-h") { console.log(help); process.exit(0); }
     if (arg === "--apply") options.apply = true;
     else if (arg === "--overwrite") options.overwrite = true;
     else if (arg === "--refresh") options.refresh = true;
-    else if (["--actor", "--root", "--cache", "--limit"].includes(arg)) {
+    else if (["--actor", "--root", "--cache", "--limit", "--concurrency"].includes(arg)) {
       const value = args[++i];
       if (!value || value.startsWith("--")) throw new Error(`${arg} 需要参数值`);
       if (arg === "--actor") options.actor = value.trim();
       else if (arg === "--root") options.root = value;
       else if (arg === "--cache") options.cache = value;
-      else { options.limit = Number(value); if (!Number.isInteger(options.limit) || options.limit < 0) throw new Error("--limit 必须是非负整数"); }
+      else if (arg === "--limit") { options.limit = Number(value); if (!Number.isInteger(options.limit) || options.limit < 0) throw new Error("--limit 必须是非负整数"); }
+      else { options.concurrency = Number(value); if (!Number.isInteger(options.concurrency) || options.concurrency < 1 || options.concurrency > 3) throw new Error("--concurrency 必须在 1 到 3 之间"); }
     } else throw new Error(`未知参数：${arg}\n\n${help}`);
   }
   if (options.overwrite && !options.apply) throw new Error("--overwrite 需要同时指定 --apply");
@@ -136,29 +138,41 @@ async function main(): Promise<void> {
   const client = new FnOSClient(baseUrl, process.env.FNOS_USERNAME || "", process.env.FNOS_PASSWORD || "", process.env.FNOS_TOKEN);
   await client.login();
 
-  for (const item of selected) {
+  const processActor = async (item: { name: string; count: number }): Promise<void> => {
     const name = item.name;
     console.log(`\n[${name}] NFO 出现 ${item.count} 次`);
     const matches = (await client.searchPeople(name)).filter((person) => exactNameMatch(person, name));
-    if (!matches.length) { console.log("  跳过：飞牛中没有同名演员档案（本程序不会新建档案）"); continue; }
-    if (matches.length > 1) { console.log(`  跳过：找到 ${matches.length} 个同名档案，无法安全判断目标`); continue; }
+    if (!matches.length) { console.log("  跳过：飞牛中没有同名演员档案（本程序不会新建档案）"); return; }
+    if (matches.length > 1) { console.log(`  跳过：找到 ${matches.length} 个同名档案，无法安全判断目标`); return; }
     const detail = await client.getEditDetail(matches[0]!.guid);
-    if (!isLocalPerson(detail)) { console.log("  跳过：该档案不是可安全修改的本地演员资料（官方/在线资料受保护）"); continue; }
+    if (!isLocalPerson(detail)) { console.log("  跳过：该档案不是可安全修改的本地演员资料（官方/在线资料受保护）"); return; }
 
     const profile = await scrapedProfile(name, options.cache, options.refresh);
-    if (!profile || (!profile.imageUrl && !profile.biography)) { console.log("  未找到可用头像或简介"); continue; }
+    if (!profile || (!profile.imageUrl && !profile.biography)) { console.log("  未找到可用头像或简介"); return; }
     const canBio = Boolean(profile.biography && !detail.biography_locked && (options.overwrite || !detail.biography?.trim()));
     const canImage = Boolean(profile.imageUrl && !detail.profile_path_locked && (options.overwrite || !detail.profile_path?.trim()));
-    if (!canBio && !canImage) { console.log("  跳过：头像和简介都已存在或字段已锁定"); continue; }
+    if (!canBio && !canImage) { console.log("  跳过：头像和简介都已存在或字段已锁定"); return; }
 
     const image = canImage ? await fetchPortrait(profile.imageUrl!) : undefined;
     console.log(`  来源：${profile.sourceNames.join(", ") || "未知"}`);
     console.log(`  将更新：${[canImage && "头像", canBio && "简介"].filter(Boolean).join("、")}`);
-    if (!options.apply) continue;
-    const profilePath = image ? await client.uploadProfile(image) : undefined;
-    await client.saveProfile(detail, canBio ? profile.biography : undefined, profilePath);
-    console.log("  已写入飞牛演员档案");
-  }
+    if (options.apply) {
+      const profilePath = image ? await client.uploadProfile(image) : undefined;
+      await client.saveProfile(detail, canBio ? profile.biography : undefined, profilePath);
+      console.log("  已写入飞牛演员档案");
+    }
+  };
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const index = next++;
+      if (index >= selected.length) return;
+      const item = selected[index]!;
+      try { await processActor(item); }
+      catch (error) { console.warn(`[${item.name}] 处理失败，继续下一个演员：${error instanceof Error ? error.message : String(error)}`); }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(options.concurrency, selected.length) }, worker));
 }
 
 main().catch((error) => { console.error(`错误：${error instanceof Error ? error.message : String(error)}`); process.exitCode = 1; });

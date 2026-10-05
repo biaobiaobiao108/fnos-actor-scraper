@@ -19,7 +19,7 @@
 1. `--actor` 提供单个演员名，或递归读取 `--root` 下 `.nfo` 中的 `<actor><name>`。不跟随符号链接，忽略坏 NFO。
 2. 规范化名称并去重，记录演员在 NFO 中出现次数。
 3. 登录 FnOS，精确搜索中央 `person` 记录并读取编辑详情。
-4. 对可更新的本地档案并行查询 Gfriends、Minnano-AV、Wikipedia；从来源合并头像和简介，缓存到 `/config/actors`。
+4. 对可更新的本地档案查询 Gfriends、Minnano-AV、Wikipedia；从来源合并头像和简介，缓存到 `/config/actors`。演员处理并发默认为 1，最高为 3。
 5. 头像下载后裁剪缩放到 640×960（2:3）并转 JPEG，以适配飞牛资料头像限制；图片经飞牛上传接口取得 `hash_path`。
 6. 预览显示计划更新字段。`--apply` 时只提交需要补齐/覆盖的字段，并保留字段锁定与名称等其他数据。
 
@@ -31,6 +31,8 @@
 - `src/image.ts`：限制 HTTPS 公网图片源，下载大小/超时限制，sharp 处理成飞牛头像格式。
 - `src/providers/*`：在线演员信息来源；来源不可用时互相隔离。
 - `src/util.ts`：名称归一化、相似度及 HTTP helper。
+
+所有外部资料和头像 HTTP 请求共用串行限速队列，默认最小间隔 2 秒；对限流和服务端错误退避重试。可用 `UPSTREAM_DELAY_MS` 调整间隔。提高演员并发不会绕过该请求队列。
 
 ## FnOS 兼容性
 

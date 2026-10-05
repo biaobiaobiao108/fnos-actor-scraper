@@ -1,8 +1,8 @@
 services:
-  fnos-actor-scraper:
+  fnactor:
     image: ghcr.io/biaobiaobiao108/fnos-actor-scraper:latest
     build: .
-    container_name: fnos-actor-scraper
+    container_name: fnactor
     network_mode: host
     env_file:
       - .env
@@ -13,6 +13,7 @@ services:
       FNOS_USERNAME: ${FNOS_USERNAME}
       FNOS_PASSWORD: ${FNOS_PASSWORD}
       FNOS_TOKEN: ${FNOS_TOKEN:-}
+      UPSTREAM_DELAY_MS: ${UPSTREAM_DELAY_MS:-2000}
     volumes:
       # Mount only the actual FnOS library folder containing the movie/TV NFO files.
       # Read-only is sufficient: the program never writes media or NFO files.

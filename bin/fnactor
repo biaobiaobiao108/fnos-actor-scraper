@@ -1,0 +1,9 @@
+#!/bin/sh
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ -f "$SCRIPT_DIR/../dist/index.js" ]; then
+  exec bun "$SCRIPT_DIR/../dist/index.js" "$@"
+fi
+if [ -f "$SCRIPT_DIR/../src/index.ts" ]; then
+  exec bun "$SCRIPT_DIR/../src/index.ts" "$@"
+fi
+exec bun /app/index.js "$@"
