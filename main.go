@@ -17,9 +17,10 @@ import (
 )
 
 type options struct {
-	actor, root, database, cache     string
-	limit, concurrency               int
-	apply, overwrite, refresh, probe bool
+	actor, root, database, cache            string
+	limit, concurrency                      int
+	watchInterval                           time.Duration
+	apply, overwrite, refresh, probe, watch bool
 }
 type task struct {
 	name   string
@@ -53,6 +54,8 @@ func run() error {
 	args.BoolVar(&o.overwrite, "overwrite", false, "覆盖已存在字段，必须同时指定 --apply")
 	args.BoolVar(&o.refresh, "refresh", false, "忽略来源缓存并重新查询")
 	args.BoolVar(&o.probe, "probe", false, "仅测试在线来源和头像处理，不登录或修改飞牛")
+	args.BoolVar(&o.watch, "watch", false, "持续监控演员数据库；首次仅建立基线")
+	args.DurationVar(&o.watchInterval, "watch-interval", time.Minute, "监控轮询间隔，范围 10 秒到 24 小时")
 	args.Usage = func() {
 		fmt.Fprint(args.Output(), `fnactor — 补全飞牛影视中的本地演员档案
 
@@ -71,6 +74,8 @@ func run() error {
   --overwrite        覆盖已有头像/简介（仍保护官方、在线和锁定资料）
   --refresh          忽略缓存并重新抓取来源
   --probe            只测试来源和图片，不登录或写入飞牛
+  --watch            持续监控新演员（首次启动只建立基线）
+  --watch-interval   监控轮询间隔，默认 1m，范围 10s 到 24h
   --help             显示帮助
 
 环境变量：FNOS_URL、FNOS_USERNAME、FNOS_PASSWORD 或 FNOS_TOKEN、FNOS_DB_PATH、UPSTREAM_DELAY_MS。
@@ -108,6 +113,23 @@ func run() error {
 	}
 	if o.probe && o.actor == "" {
 		return fmt.Errorf("--probe 需要同时指定 --actor 演员名")
+	}
+	if o.watch {
+		if !o.apply {
+			return fmt.Errorf("--watch 是持续自动处理模式，必须显式指定 --apply")
+		}
+		if o.actor != "" || o.root != "" || o.probe || o.limit > 0 || o.overwrite {
+			return fmt.Errorf("--watch 不能与 --actor、--root、--probe、--limit 或 --overwrite 同时使用")
+		}
+		if o.concurrency != 1 {
+			return fmt.Errorf("--watch 当前按演员顺序处理，请保持 --concurrency=1")
+		}
+		if o.watchInterval < 10*time.Second || o.watchInterval > 24*time.Hour {
+			return fmt.Errorf("--watch-interval 必须在 10s 到 24h 之间")
+		}
+	}
+	if o.watch {
+		return runWatch(o)
 	}
 
 	tasks, err := collectTasks(o)
@@ -250,24 +272,49 @@ func processActor(ctx context.Context, client *FnOSClient, providers *ProviderSe
 		return nil
 	}
 	profile := cachedScrape(ctx, providers, name, o.cache, o.refresh)
-	if profile == nil || profile.ImageURL == "" && profile.Biography == "" {
+	if profile == nil || len(portraitCandidates(profile)) == 0 && profile.Biography == "" {
 		fmt.Println("  未找到可用头像或简介")
 		return nil
 	}
-	canBio := profile.Biography != "" && !detail.BiographyLocked && (o.overwrite || strings.TrimSpace(detail.Biography) == "")
-	canImage := profile.ImageURL != "" && !detail.ProfilePathLocked && (o.overwrite || strings.TrimSpace(detail.ProfilePath) == "")
+	hasBio := strings.TrimSpace(detail.Biography) != ""
+	hasImage := strings.TrimSpace(detail.ProfilePath) != ""
+	needsBio := o.overwrite || !hasBio
+	needsImage := o.overwrite || !hasImage
+	canBio := needsBio && !detail.BiographyLocked && strings.TrimSpace(profile.Biography) != ""
+	canImage := needsImage && !detail.ProfilePathLocked && len(portraitCandidates(profile)) > 0
 	if !canBio && !canImage {
-		fmt.Println("  跳过：头像和简介都已存在或字段已锁定")
+		printNoWritableFields(detail, profile, hasBio, hasImage, o.overwrite)
 		return nil
 	}
 	var image []byte
+	imageSource := ""
 	if canImage {
-		image, err = fetchPortrait(ctx, upstream, profile.ImageURL)
-		if err != nil {
-			return fmt.Errorf("%s 头像处理失败：%w", name, err)
+		for _, candidate := range portraitCandidates(profile) {
+			image, err = fetchPortrait(ctx, upstream, candidate.URL)
+			if err != nil {
+				fmt.Printf("  来源 %s 的头像处理失败，尝试下一来源：%v\n", candidate.Source, err)
+				continue
+			}
+			imageSource = candidate.Source
+			break
+		}
+		if len(image) == 0 {
+			canImage = false
+			fmt.Println("  所有头像来源均处理失败，跳过头像")
+			if !canBio {
+				fmt.Printf("  简介无法更新：%s；跳过此演员\n", biographyBlockReason(detail, profile, hasBio, o.overwrite))
+				return nil
+			}
 		}
 	}
-	fmt.Printf("  来源：%s\n  将更新：%s\n", strings.Join(profile.SourceNames, ", "), strings.Join(nonempty([]string{map[bool]string{true: "头像"}[canImage], map[bool]string{true: "简介"}[canBio]}), "、"))
+	usedSources := make([]string, 0, 2)
+	if canImage && imageSource != "" {
+		usedSources = append(usedSources, imageSource)
+	}
+	if canBio {
+		usedSources = append(usedSources, firstNonempty(profile.BiographySource, "简介来源"))
+	}
+	fmt.Printf("  来源：%s\n  将更新：%s\n", strings.Join(unique(usedSources), ", "), strings.Join(nonempty([]string{map[bool]string{true: "头像"}[canImage], map[bool]string{true: "简介"}[canBio]}), "、"))
 	if o.apply {
 		var profilePath *string
 		if len(image) > 0 {
@@ -289,6 +336,64 @@ func processActor(ctx context.Context, client *FnOSClient, providers *ProviderSe
 	return nil
 }
 
+func portraitCandidates(profile *ActorProfile) []PortraitCandidate {
+	if profile == nil {
+		return nil
+	}
+	if len(profile.ImageCandidates) > 0 {
+		return profile.ImageCandidates
+	}
+	if strings.TrimSpace(profile.ImageURL) == "" {
+		return nil
+	}
+	return []PortraitCandidate{{URL: profile.ImageURL, Source: firstNonempty(strings.Join(profile.SourceNames, ", "), "缓存来源")}}
+}
+
+func printNoWritableFields(detail FnPerson, profile *ActorProfile, hasBio, hasImage, overwrite bool) {
+	if hasBio && hasImage && !overwrite {
+		fmt.Println("  跳过：头像和简介都已存在；默认只补缺失字段")
+		return
+	}
+	blocked := make([]string, 0, 2)
+	if reason := biographyBlockReason(detail, profile, hasBio, overwrite); reason != "" {
+		blocked = append(blocked, "简介"+reason)
+	}
+	if reason := imageBlockReason(detail, profile, hasImage, overwrite); reason != "" {
+		blocked = append(blocked, "头像"+reason)
+	}
+	if len(blocked) == 0 {
+		fmt.Println("  跳过：没有可补充的缺失字段")
+		return
+	}
+	fmt.Printf("  跳过：没有可写入的缺失字段（%s）\n", strings.Join(blocked, "；"))
+}
+
+func biographyBlockReason(detail FnPerson, profile *ActorProfile, exists, overwrite bool) string {
+	if detail.BiographyLocked {
+		return "字段已锁定"
+	}
+	if exists && !overwrite {
+		return "已有内容"
+	}
+	if strings.TrimSpace(profile.Biography) == "" {
+		return "来源未提供资料"
+	}
+	return ""
+}
+
+func imageBlockReason(detail FnPerson, profile *ActorProfile, exists, overwrite bool) string {
+	if detail.ProfilePathLocked {
+		return "字段已锁定"
+	}
+	if exists && !overwrite {
+		return "已有内容"
+	}
+	if len(portraitCandidates(profile)) == 0 {
+		return "来源未提供资料"
+	}
+	return ""
+}
+
 func cachedScrape(ctx context.Context, providers *ProviderService, name, cache string, refresh bool) *ActorProfile {
 	sum := sha256.Sum256([]byte(name))
 	file := filepath.Join(cache, "actors", hex.EncodeToString(sum[:])+".json")
@@ -296,7 +401,7 @@ func cachedScrape(ctx context.Context, providers *ProviderService, name, cache s
 		if info, err := os.Stat(file); err == nil && info.Size() <= 1<<20 && time.Since(info.ModTime()) < 30*24*time.Hour {
 			if data, err := os.ReadFile(file); err == nil {
 				var p ActorProfile
-				if json.Unmarshal(data, &p) == nil {
+				if json.Unmarshal(data, &p) == nil && (len(p.ImageCandidates) > 0 || strings.TrimSpace(p.ImageURL) == "") {
 					return &p
 				}
 			}
@@ -319,14 +424,24 @@ func probe(ctx context.Context, name string, o options) error {
 		return nil
 	}
 	fmt.Printf("来源：%s\n简介：%t\n", strings.Join(profile.SourceNames, ", "), strings.TrimSpace(profile.Biography) != "")
-	if profile.ImageURL != "" {
-		portrait, err := fetchPortrait(ctx, upstream, profile.ImageURL)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("头像处理成功：JPEG %d 字节\n", len(portrait))
-	} else {
+	candidates := portraitCandidates(profile)
+	if len(candidates) == 0 {
 		fmt.Println("头像：未找到")
+	} else {
+		found := false
+		for _, candidate := range candidates {
+			portrait, err := fetchPortrait(ctx, upstream, candidate.URL)
+			if err != nil {
+				fmt.Printf("来源 %s 头像处理失败，尝试下一来源：%v\n", candidate.Source, err)
+				continue
+			}
+			fmt.Printf("头像处理成功，使用来源 %s：JPEG %d 字节\n", candidate.Source, len(portrait))
+			found = true
+			break
+		}
+		if !found {
+			fmt.Println("所有头像来源均失败；单张头像错误不会终止批量任务")
+		}
 	}
 	var stats runtime.MemStats
 	runtime.GC()

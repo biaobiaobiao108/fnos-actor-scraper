@@ -17,7 +17,7 @@
 ## CLI
 
 ```text
-fnactor [--actor NAME | --root DIR] [--db FILE] [--cache DIR] [--limit N] [--concurrency N] [--refresh] [--apply] [--overwrite] [--probe]
+fnactor [--actor NAME | --root DIR | --watch] [--db FILE] [--cache DIR] [--limit N] [--concurrency N] [--refresh] [--apply] [--overwrite] [--probe] [--watch-interval DURATION]
 ```
 
 | 参数 | 默认值 | 说明 |
@@ -32,9 +32,11 @@ fnactor [--actor NAME | --root DIR] [--db FILE] [--cache DIR] [--limit N] [--con
 | `--probe` | 关闭 | 需要 `--actor`；抓取在线资料并处理头像，不登录、不写飞牛 |
 | `--apply` | 关闭 | 实际调用飞牛 API 保存资料；缺省为预览 |
 | `--overwrite` | 关闭 | 覆盖已有的本地未锁定字段；必须与 `--apply` 配合 |
+| `--watch` | 关闭 | 持续监控新入库演员；首次仅建立现有演员基线，必须与 `--apply` 配合，且不能和 `--actor`、`--root`、`--probe`、`--limit`、`--overwrite` 同用；顺序处理 |
+| `--watch-interval DURATION` | `1m` | 监控轮询间隔，范围 `10s` 到 `24h` |
 | `--help` | — | 显示帮助信息 |
 
-Docker 镜像无参数启动时只显示用法并保持空闲，不会自动批量扫描。在容器终端运行 `fnactor --limit 20` 才开始预览；显式添加 `--apply` 才会写入飞牛。数据库批量模式会跳过纯数字名称记录，因为在线来源按演员姓名检索。头像优先级为 Gfriends、JavDB、Wikipedia、Wikidata；JavDB 仅在演员名/别名精确匹配且头像不是占位图时提供头像。简介优先级为 Wikipedia、Wikidata。Minnano-AV 因持续返回 HTTP 403 已移除。
+Docker 镜像无参数启动时只显示用法并保持空闲，不会自动批量扫描。在容器终端运行 `fnactor --limit 20` 才开始预览；显式添加 `--apply` 才会写入飞牛。数据库批量模式会跳过纯数字名称记录，因为在线来源按演员姓名检索。头像按 Gfriends、JavDB、Wikipedia、Wikidata 的优先级逐个尝试，当前图片处理失败会回退；JavDB 仅在演员名/别名精确匹配且头像不是占位图时提供头像。简介优先级为 Wikipedia、Wikidata。Minnano-AV 因持续返回 HTTP 403 已移除。
 
 示例：
 
@@ -56,6 +58,16 @@ docker compose run --rm fnactor --actor '三上悠亚' --overwrite --apply
 ```
 
 每次实际写入前先检查预览结果。官方人物、在线人物、有外部身份标识或被锁定的字段受保护，`--overwrite` 不会取消这些保护。
+
+监控是显式启用的持续模式。首次启动读取当前本地演员名单并写入 `/config/watch-state.json`，不会处理已有记录；后续按轮询间隔发现新的 GUID 后自动处理并保存。启动 Compose 监控服务即明确授权 `--apply` 对新演员执行写入。监控状态文件应与来源缓存一起持久化；删除该文件会在下次启动重新建立基线。暂停和恢复示例：
+
+```sh
+docker compose --profile watch up -d fnactor-watch
+docker logs -f fnactor-watch
+docker compose --profile watch stop fnactor-watch
+```
+
+`fnactor-watch` 使用 `restart: unless-stopped`，会在 Docker 重启后恢复运行；普通 `fnactor` 空闲服务仍不会自动刮削。
 
 ## 环境变量
 
@@ -108,7 +120,7 @@ volumes:
 
 - 通用上游响应上限 16 MiB，必须流式计数并在超限时停止读取。
 - 头像文件最多 10 MiB，图像最多 16,000,000 像素，处理后 JPEG 最多 4 MiB。
-- 图片按单张处理，转换为 640×960 JPEG。下载、解码、转换或上传失败时应记录失败并继续/停止策略按错误类型处理，不能将无效数据写入人物档案。
+- 图片按单张处理，转换为 640×960 JPEG。下载、解码或尺寸失败时跳过当前候选并尝试下一来源；全部失败才跳过头像。如果简介可用仍可写入简介，并继续下一位演员。飞牛 API 登录、读取或保存失败仍应记录错误；监控会保留失败演员以便后续轮询重试。
 - Go `GOMEMLIMIT=640MiB` 是运行时内存目标；Compose `mem_limit: 768m` 是容器 cgroup 上限。缓存与并发必须有界，二者都不能替代逐张处理和及时释放大型 buffer。
 - 使用 `docker stats fnactor` 监控实际 NAS 内存占用；发生容器 OOM 时，先降低并发并定位未受限的响应体或图像缓冲，再考虑调整容器限制。
 

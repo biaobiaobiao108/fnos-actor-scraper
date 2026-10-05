@@ -37,17 +37,15 @@ func (service *ProviderService) Scrape(ctx context.Context, name string) *ActorP
 		name string
 		run  func() (*ActorProfile, error)
 	}{
-		// 头像优先级：Gfriends → JavDB → Wikipedia → Wikidata。
-		// 简介优先级：Wikipedia → Wikidata；合并时保留各字段第一个非空值。
+		// 收集所有头像候选，供图片处理失败时按优先级回退。
+		// 头像顺序：Gfriends → JavDB → Wikipedia → Wikidata。
+		// 简介优先级：Wikipedia → Wikidata；合并时保留第一个非空值。
 		{"Gfriends", func() (*ActorProfile, error) { return service.scrapeGfriends(ctx, name) }},
 		{"JavDB", func() (*ActorProfile, error) { return scrapeJavDB(ctx, service.upstream, name) }},
 		{"Wikipedia", func() (*ActorProfile, error) { return scrapeWikipedia(ctx, service.upstream, name) }},
 		{"Wikidata", func() (*ActorProfile, error) { return scrapeWikidata(ctx, service.upstream, name) }},
 	}
 	for _, provider := range providers {
-		if provider.name == "JavDB" && hasProfileImage(profiles) {
-			continue
-		}
 		profile, err := provider.run()
 		if err != nil {
 			fmt.Printf("%s 的来源 %s 查询失败：%v\n", name, provider.name, err)
@@ -61,15 +59,35 @@ func (service *ProviderService) Scrape(ctx context.Context, name string) *ActorP
 		return nil
 	}
 	merged := &ActorProfile{Name: name}
+	seenImages := make(map[string]bool)
 	for _, profile := range profiles {
 		merged.Aliases = append(merged.Aliases, profile.Aliases...)
 		merged.SourceURLs = append(merged.SourceURLs, profile.SourceURLs...)
 		merged.SourceNames = append(merged.SourceNames, profile.SourceNames...)
-		if merged.ImageURL == "" {
-			merged.ImageURL = profile.ImageURL
+		candidates := profile.ImageCandidates
+		if len(candidates) == 0 && strings.TrimSpace(profile.ImageURL) != "" {
+			source := firstNonempty(strings.Join(profile.SourceNames, ", "), "未知来源")
+			candidates = []PortraitCandidate{{URL: profile.ImageURL, Source: source}}
+		}
+		for _, candidate := range candidates {
+			candidate.URL = strings.TrimSpace(candidate.URL)
+			if candidate.URL == "" || seenImages[candidate.URL] {
+				continue
+			}
+			seenImages[candidate.URL] = true
+			if candidate.Source == "" {
+				candidate.Source = firstNonempty(strings.Join(profile.SourceNames, ", "), "未知来源")
+			}
+			merged.ImageCandidates = append(merged.ImageCandidates, candidate)
+		}
+		if merged.ImageURL == "" && len(merged.ImageCandidates) > 0 {
+			merged.ImageURL = merged.ImageCandidates[0].URL
 		}
 		if merged.Biography == "" {
 			merged.Biography = strings.TrimSpace(profile.Biography)
+			if merged.Biography != "" {
+				merged.BiographySource = firstNonempty(profile.BiographySource, strings.Join(profile.SourceNames, ", "))
+			}
 		}
 		if merged.Birthday == "" {
 			merged.Birthday = profile.Birthday
@@ -77,15 +95,6 @@ func (service *ProviderService) Scrape(ctx context.Context, name string) *ActorP
 	}
 	merged.Aliases, merged.SourceURLs, merged.SourceNames = unique(merged.Aliases), unique(merged.SourceURLs), unique(merged.SourceNames)
 	return merged
-}
-
-func hasProfileImage(profiles []ActorProfile) bool {
-	for _, profile := range profiles {
-		if strings.TrimSpace(profile.ImageURL) != "" {
-			return true
-		}
-	}
-	return false
 }
 
 func scrapeWikidata(ctx context.Context, upstream *Upstream, name string) (*ActorProfile, error) {
@@ -197,8 +206,13 @@ func scrapeWikidata(ctx context.Context, upstream *Upstream, name string) (*Acto
 	if biography == "" && imageURL == "" {
 		return nil, nil
 	}
+	biographySource := ""
+	if biography != "" {
+		biographySource = "Wikidata"
+	}
 	return &ActorProfile{Name: name, Aliases: unique(aliases), ImageURL: imageURL, Biography: biography,
-		SourceURLs: sourceURLs, SourceNames: []string{"Wikidata"}}, nil
+		BiographySource: biographySource,
+		SourceURLs:      sourceURLs, SourceNames: []string{"Wikidata"}}, nil
 }
 
 func containsExact(values []string, expected string) bool {
@@ -406,7 +420,12 @@ func scrapeWikipedia(ctx context.Context, upstream *Upstream, name string) (*Act
 		if page.Title != name {
 			aliases = append(aliases, page.Title)
 		}
-		return &ActorProfile{Name: name, Aliases: aliases, ImageURL: page.Thumbnail.Source, Biography: strings.TrimSpace(page.Extract), SourceURLs: []string{"https://" + language + ".wikipedia.org/wiki/" + url.PathEscape(page.Title)}, SourceNames: []string{"Wikipedia (" + language + ")"}}, nil
+		biography := strings.TrimSpace(page.Extract)
+		biographySource := ""
+		if biography != "" {
+			biographySource = "Wikipedia (" + language + ")"
+		}
+		return &ActorProfile{Name: name, Aliases: aliases, ImageURL: page.Thumbnail.Source, Biography: biography, BiographySource: biographySource, SourceURLs: []string{"https://" + language + ".wikipedia.org/wiki/" + url.PathEscape(page.Title)}, SourceNames: []string{"Wikipedia (" + language + ")"}}, nil
 	}
 	return nil, nil
 }

@@ -1,35 +1,45 @@
+x-fnactor-common: &fnactor-common
+  image: ghcr.io/biaobiaobiao108/fnos-actor-scraper:latest
+  build: .
+  network_mode: host
+  mem_limit: 768m
+  env_file:
+    - .env
+  environment:
+    CACHE_DIR: /config
+    FNOS_DB_PATH: /fnos-db/trimmedia.db
+    FNOS_URL: ${FNOS_URL}
+    FNOS_USERNAME: ${FNOS_USERNAME}
+    FNOS_PASSWORD: ${FNOS_PASSWORD}
+    FNOS_TOKEN: ${FNOS_TOKEN:-}
+    UPSTREAM_DELAY_MS: ${UPSTREAM_DELAY_MS:-2000}
+    GOMEMLIMIT: ${GOMEMLIMIT:-640MiB}
+    GOGC: ${GOGC:-75}
+    http_proxy: ${http_proxy:-}
+    https_proxy: ${https_proxy:-}
+    HTTP_PROXY: ${http_proxy:-}
+    HTTPS_PROXY: ${https_proxy:-}
+    no_proxy: ${no_proxy:-localhost,127.0.0.1,192.168.31.86,192.168.31.228,flymoo}
+    NO_PROXY: ${no_proxy:-localhost,127.0.0.1,192.168.31.86,192.168.31.228,flymoo}
+  volumes:
+    # SQLite opens the DB in mode=ro; the directory must allow transient WAL/SHM lock handling.
+    - type: bind
+      source: /usr/local/apps/@appdata/trim.media/database
+      target: /fnos-db
+    - type: bind
+      source: /vol1/docker/fnactor-cache
+      target: /config
+
 services:
   fnactor:
-    image: ghcr.io/biaobiaobiao108/fnos-actor-scraper:latest
-    build: .
+    <<: *fnactor-common
     container_name: fnactor
-    network_mode: host
-    mem_limit: 768m
     restart: "no"
-    env_file:
-      - .env
-    environment:
-      CACHE_DIR: /config
-      FNOS_DB_PATH: /fnos-db/trimmedia.db
-      FNOS_URL: ${FNOS_URL}
-      FNOS_USERNAME: ${FNOS_USERNAME}
-      FNOS_PASSWORD: ${FNOS_PASSWORD}
-      FNOS_TOKEN: ${FNOS_TOKEN:-}
-      UPSTREAM_DELAY_MS: ${UPSTREAM_DELAY_MS:-2000}
-      GOMEMLIMIT: ${GOMEMLIMIT:-640MiB}
-      GOGC: ${GOGC:-75}
-      http_proxy: ${http_proxy:-}
-      https_proxy: ${https_proxy:-}
-      HTTP_PROXY: ${http_proxy:-}
-      HTTPS_PROXY: ${https_proxy:-}
-      no_proxy: ${no_proxy:-localhost,127.0.0.1,192.168.31.86,192.168.31.228,flymoo}
-      NO_PROXY: ${no_proxy:-localhost,127.0.0.1,192.168.31.86,192.168.31.228,flymoo}
-    volumes:
-      # SQLite opens the DB in mode=ro; the directory must allow transient WAL/SHM lock handling.
-      - type: bind
-        source: /usr/local/apps/@appdata/trim.media/database
-        target: /fnos-db
-      - type: bind
-        source: /vol1/docker/fnactor-cache
-        target: /config
     profiles: ["manual"]
+
+  fnactor-watch:
+    <<: *fnactor-common
+    container_name: fnactor-watch
+    command: ["--watch", "--apply"]
+    restart: unless-stopped
+    profiles: ["watch"]

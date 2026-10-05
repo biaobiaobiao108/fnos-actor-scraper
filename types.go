@@ -1,13 +1,20 @@
 package main
 
 type ActorProfile struct {
-	Name        string   `json:"name"`
-	Aliases     []string `json:"aliases"`
-	ImageURL    string   `json:"imageUrl,omitempty"`
-	Biography   string   `json:"biography,omitempty"`
-	Birthday    string   `json:"birthday,omitempty"`
-	SourceURLs  []string `json:"sourceUrls"`
-	SourceNames []string `json:"sourceNames"`
+	Name            string              `json:"name"`
+	Aliases         []string            `json:"aliases"`
+	ImageURL        string              `json:"imageUrl,omitempty"`
+	ImageCandidates []PortraitCandidate `json:"imageCandidates,omitempty"`
+	Biography       string              `json:"biography,omitempty"`
+	BiographySource string              `json:"biographySource,omitempty"`
+	Birthday        string              `json:"birthday,omitempty"`
+	SourceURLs      []string            `json:"sourceUrls"`
+	SourceNames     []string            `json:"sourceNames"`
+}
+
+type PortraitCandidate struct {
+	URL    string `json:"url"`
+	Source string `json:"source"`
 }
 
 type FnPerson struct {

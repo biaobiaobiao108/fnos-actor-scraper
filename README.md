@@ -9,9 +9,11 @@
 - 默认以只读方式从飞牛影视数据库枚举本地演员；无需挂载电影或剧集目录。
 - 数据库只用于读取候选名单。简介和头像只能通过飞牛影视 API 保存，程序不直接修改数据库、WAL/SHM 或飞牛管理的图片目录。
 - 仅处理本地人物档案；飞牛官方档案、已有 TMDb/IMDb 标识的在线档案会跳过。
-- 默认只补缺少的简介和头像。资料已齐全时跳过；`--overwrite` 只允许覆盖本地档案中未锁定的字段。
+- 头像和简介分别判断，只补各自缺失且未锁定的字段；一项已存在不会妨碍补另一项。两项都无需补充时才跳过；`--overwrite` 只允许覆盖本地档案中未锁定的字段。
 - 默认是预览模式。只有显式传入 `--apply` 才会写入飞牛影视。不会创建人物，也不会猜测处理重名。
 - 支持 `--actor` 指定单人，也支持通过 `--root` 只读扫描 NFO 并按其中演员名筛选。
+- 支持显式后台监控新入库演员；首次只建立基线，不会批量处理已有演员，后续新演员自动刮削并保存。
+- 头像按 Gfriends、JavDB、Wikipedia、Wikidata 顺序准备候选，下载、解码或尺寸校验失败会尝试下一来源；全部失败才跳过头像。有可用简介时仍保存简介，并继续处理下一位演员。
 
 ## 部署
 
@@ -112,6 +114,23 @@ ghcr.io/biaobiaobiao108/fnos-actor-scraper:latest
 
    `--apply` 才会通过飞牛影视 API 保存信息。覆盖已有且未锁定的本地字段时还需显式加 `--overwrite`；在线档案等受保护记录不会因此被覆盖。
 
+### 后台监控新演员
+
+需要持续自动刮削时，显式启动单独的监控服务。首次运行会把当时数据库中的演员记为基线，不处理现有演员；之后检测到新的本地演员记录时才会自动刮削并写入。处理状态保存在 `/config/watch-state.json`，与 `/config/actors` 来源缓存一同持久化。监控模式必须显式带 `--apply`，因此启动监控服务代表授权它自动写入新演员资料。
+
+```sh
+# 启动后台监控服务（开启后会随 Docker 重启恢复）
+docker compose --profile watch up -d fnactor-watch
+
+# 查看日志
+docker logs -f fnactor-watch
+
+# 停止监控
+docker compose --profile watch stop fnactor-watch
+```
+
+首次启用后，日志会显示“监控基线已建立”。这次启动时已存在的演员不会被处理；后续新增演员会每分钟检查一次。遇到飞牛 API 等暂时性错误的演员会在之后轮询重试。若删除 `/config/watch-state.json`，下次启动会重新建立基线，因此不会回溯刮削已有演员。普通 `fnactor` 服务仍为空闲模式，不会因更新而自动开始刮削。
+
 ### Compose 挂载与网络说明
 
 默认批量模式通过 SQLite 只读连接从飞牛影视 `person` 数据库表枚举本地演员，不需要媒体目录，也不需要挂载飞牛私有图片目录。只有使用 `--root` 扫描 NFO 筛选任务时，才需在 `compose.yaml` 的 `volumes` 增加媒体目录只读 bind mount，并把容器内路径传给 `--root`。当前 NAS 上 `/vol1/video/movies` 不存在，请使用飞牛媒体库中实际存在的路径。
@@ -151,6 +170,8 @@ docker compose run --rm fnactor --actor '三上悠亚' --overwrite --apply
 | `--probe` | 仅实测来源抓取和头像处理，不登录或写入飞牛；需要 `--actor` |
 | `--apply` | 实际通过飞牛 API 保存资料；缺省仅预览 |
 | `--overwrite` | 覆盖本地档案中已有且未锁定的字段；必须搭配 `--apply` |
+| `--watch` | 持续监控新入库演员；首次建立基线，需同时使用 `--apply`，不能和单次筛选参数组合 |
+| `--watch-interval` | 监控轮询周期；默认 `1m`，范围 `10s` 到 `24h` |
 | `--help` | 显示命令帮助 |
 
 ## 限流与内存
@@ -163,11 +184,12 @@ docker compose run --rm fnactor --actor '三上悠亚' --overwrite --apply
 
 ## 实现概览
 
-- Go CLI 单次运行，结束后退出。
+- Go CLI 默认单次运行，另有必须显式启用的持续监控模式；Docker 默认启动仍为空闲，不会自动刮削。
 - 使用标准库 `net/http`、`encoding/json`、`encoding/xml` 访问结构化资料来源。
 - 使用 `modernc.org/sqlite` 只读访问飞牛影视 `person` 表。
 - 使用 `golang.org/x/image/webp` 和标准库 JPEG 解码器处理头像，转换为 640×960 JPEG 后经飞牛 API 上传。
-- 在线来源包括 Gfriends、JavDB、Wikipedia 和 Wikidata。头像优先采用 Gfriends，其次为 JavDB 演员搜索卡片头像，再回退到 Wikipedia/Wikidata 图片；简介优先采用 Wikipedia，其次 Wikidata。JavDB 只按精确演员名/别名匹配，不采信占位头像；它不提供可靠简介。缓存存放在 `/config`。
+- 头像按单张处理；下载/解码/尺寸失败会回退到下一来源，全部失败才跳过头像，并保留可写入的简介，不会终止整个批次。监控模式把已处理演员 GUID 保存在 `/config/watch-state.json`，首次建基线、之后按数据库轮询新记录。
+- 在线来源包括 Gfriends、JavDB、Wikipedia 和 Wikidata。头像按 Gfriends、JavDB 演员搜索卡片、Wikipedia、Wikidata 的优先级逐个尝试，当前候选处理失败会回退到下一来源；简介优先采用 Wikipedia，其次 Wikidata。JavDB 只按精确演员名/别名匹配，不采信占位头像；它不提供可靠简介。缓存存放在 `/config`。
 - 飞牛 API 是其 Web 前端使用的内部接口，飞牛版本升级时可能变化；请求会附带前端客户端标识和签名，版本变化时需对照 NAS 前端资源核验。
 
 详细架构、接口、部署配置与故障排查见[实现与架构](docs/ARCHITECTURE.md)和[接口与使用说明](docs/INTERFACES.md)。项目协作规范见 [AGENTS.md](AGENTS.md)。
