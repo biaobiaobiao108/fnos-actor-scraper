@@ -151,7 +151,7 @@ async function main(): Promise<void> {
   if (!baseUrl) throw new Error("请设置 FNOS_URL，例如 https://192.168.1.10:5667");
   const url = new URL(baseUrl);
   if (url.protocol !== "https:" && !["localhost", "127.0.0.1"].includes(url.hostname)) throw new Error("FNOS_URL 必须使用 HTTPS（本机 localhost 可使用 HTTP）");
-  const client = new FnOSClient(baseUrl, process.env.FNOS_USERNAME || "", process.env.FNOS_PASSWORD || "", process.env.FNOS_TOKEN);
+  const client = new FnOSClient(baseUrl, process.env.FNOS_USERNAME || "", process.env.FNOS_PASSWORD || "", process.env.FNOS_TOKEN, process.env.FNOS_CA_FILE);
   await client.login();
 
   const processActor = async (item: { name: string; count: number; person?: FnPerson }): Promise<void> => {

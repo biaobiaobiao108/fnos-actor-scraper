@@ -14,6 +14,7 @@ services:
       FNOS_USERNAME: ${FNOS_USERNAME}
       FNOS_PASSWORD: ${FNOS_PASSWORD}
       FNOS_TOKEN: ${FNOS_TOKEN:-}
+      FNOS_CA_FILE: ${FNOS_CA_FILE:-}
       UPSTREAM_DELAY_MS: ${UPSTREAM_DELAY_MS:-2000}
       http_proxy: ${http_proxy:-}
       https_proxy: ${https_proxy:-}
@@ -30,4 +31,8 @@ services:
       - type: bind
         source: /vol1/docker/fnactor-cache
         target: /config
+      - type: bind
+        source: ${FNOS_CA_SOURCE:-/dev/null}
+        target: /fnos-ca.pem
+        read_only: true
     profiles: ["manual"]
