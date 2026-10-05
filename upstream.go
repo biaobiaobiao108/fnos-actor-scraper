@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +23,33 @@ type Upstream struct {
 	mu     sync.Mutex
 	last   time.Time
 	delay  time.Duration
+}
+
+type upstreamHTTPError struct {
+	status int
+	url    string
+}
+
+func (err *upstreamHTTPError) Error() string {
+	return fmt.Sprintf("HTTP %d：%s", err.status, err.url)
+}
+
+func (err *upstreamHTTPError) Retryable() bool {
+	return err.status == http.StatusTooManyRequests || err.status >= 500
+}
+
+func isRetryableUpstreamError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var retryable interface{ Retryable() bool }
+	if errors.As(err, &retryable) {
+		return retryable.Retryable()
+	}
+	var networkErr net.Error
+	var pathErr *os.PathError
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.As(err, &networkErr) || errors.As(err, &pathErr) || errors.Is(err, fs.ErrPermission)
 }
 
 func NewUpstream() *Upstream {
@@ -62,7 +93,6 @@ func (u *Upstream) Get(ctx context.Context, target string, headers map[string]st
 			case <-timer.C:
 			}
 		}
-		u.last = time.Now()
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 		if err != nil {
 			return nil, err
@@ -75,6 +105,7 @@ func (u *Upstream) Get(ctx context.Context, target string, headers map[string]st
 		}
 		response, err := u.client.Do(request)
 		if err != nil {
+			u.last = time.Now()
 			lastErr = err
 			if attempt < 2 {
 				if err := pause(ctx, backoff(attempt)); err != nil {
@@ -84,33 +115,50 @@ func (u *Upstream) Get(ctx context.Context, target string, headers map[string]st
 			}
 			return nil, fmt.Errorf("上游请求失败：%w", err)
 		}
-		if response.ContentLength > limit {
-			response.Body.Close()
-			return nil, fmt.Errorf("上游响应超过 %d 字节限制", limit)
-		}
 		if isRetryable(response.StatusCode) && attempt < 2 {
 			wait := retryDelay(response, attempt)
 			response.Body.Close()
+			u.last = time.Now()
 			fmt.Printf("上游返回 HTTP %d，等待 %s 后重试\n", response.StatusCode, wait.Round(time.Second))
 			if err := pause(ctx, wait); err != nil {
 				return nil, err
 			}
 			continue
 		}
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			preview, _ := io.ReadAll(io.LimitReader(response.Body, 512))
+			response.Body.Close()
+			u.last = time.Now()
+			return nil, &upstreamHTTPError{status: response.StatusCode, url: target + errorPreview(preview)}
+		}
+		if response.ContentLength > limit {
+			response.Body.Close()
+			u.last = time.Now()
+			return nil, fmt.Errorf("上游响应超过 %d 字节限制", limit)
+		}
 		body, readErr := io.ReadAll(io.LimitReader(response.Body, limit+1))
 		response.Body.Close()
+		u.last = time.Now()
 		if readErr != nil {
 			return nil, readErr
 		}
 		if int64(len(body)) > limit {
 			return nil, fmt.Errorf("上游响应超过 %d 字节限制", limit)
 		}
-		if response.StatusCode < 200 || response.StatusCode >= 300 {
-			return nil, fmt.Errorf("HTTP %d %s: %s", response.StatusCode, response.Status, target)
-		}
 		return body, nil
 	}
 	return nil, lastErr
+}
+
+func errorPreview(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	text := strings.Join(strings.Fields(string(body)), " ")
+	if len(text) > 256 {
+		text = text[:256] + "…"
+	}
+	return ": " + text
 }
 
 func isRetryable(status int) bool {

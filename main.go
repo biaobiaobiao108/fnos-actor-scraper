@@ -8,10 +8,12 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 )
@@ -54,7 +56,7 @@ func run() error {
 	args.BoolVar(&o.overwrite, "overwrite", false, "覆盖已存在字段，必须同时指定 --apply")
 	args.BoolVar(&o.refresh, "refresh", false, "忽略来源缓存并重新查询")
 	args.BoolVar(&o.probe, "probe", false, "仅测试在线来源和头像处理，不登录或修改飞牛")
-	args.BoolVar(&o.watch, "watch", false, "持续监控演员数据库；首次仅建立基线")
+	args.BoolVar(&o.watch, "watch", false, "持续监控演员数据库；首次扫描全库并补充缺失字段")
 	args.DurationVar(&o.watchInterval, "watch-interval", time.Minute, "监控轮询间隔，范围 10 秒到 24 小时")
 	args.Usage = func() {
 		fmt.Fprint(args.Output(), `fnactor — 补全飞牛影视中的本地演员档案
@@ -74,11 +76,11 @@ func run() error {
   --overwrite        覆盖已有头像/简介（仍保护官方、在线和锁定资料）
   --refresh          忽略缓存并重新抓取来源
   --probe            只测试来源和图片，不登录或写入飞牛
-  --watch            持续监控新演员（首次启动只建立基线）
+  --watch            持续监控演员库（首次启动扫描全库并补充缺失字段）
   --watch-interval   监控轮询间隔，默认 1m，范围 10s 到 24h
   --help             显示帮助
 
-环境变量：FNOS_URL、FNOS_USERNAME、FNOS_PASSWORD 或 FNOS_TOKEN、FNOS_DB_PATH、UPSTREAM_DELAY_MS。
+环境变量：FNOS_URL、FNOS_USERNAME、FNOS_PASSWORD 或 FNOS_TOKEN、FNOS_DB_PATH、UPSTREAM_DELAY_MS、JAVDB_BASE_URL。
 `)
 	}
 	if err := args.Parse(os.Args[1:]); err == flag.ErrHelp {
@@ -114,6 +116,12 @@ func run() error {
 	if o.probe && o.actor == "" {
 		return fmt.Errorf("--probe 需要同时指定 --actor 演员名")
 	}
+	if o.actor != "" && o.root != "" {
+		return fmt.Errorf("--actor 与 --root 不能同时指定")
+	}
+	if o.probe && o.apply {
+		return fmt.Errorf("--probe 仅用于只读诊断，不能与 --apply 同时指定")
+	}
 	if o.watch {
 		if !o.apply {
 			return fmt.Errorf("--watch 是持续自动处理模式，必须显式指定 --apply")
@@ -139,8 +147,10 @@ func run() error {
 	if o.limit > 0 && len(tasks) > o.limit {
 		tasks = tasks[:o.limit]
 	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	if o.probe {
-		return probe(context.Background(), tasks[0].name, o)
+		return probe(ctx, tasks[0].name, o)
 	}
 	fmt.Printf("收集到 %d 个待处理演员，本次处理 %d 个。模式：%s\n", len(tasks), len(tasks), map[bool]string{true: "写入飞牛", false: "预览"}[o.apply])
 	if len(tasks) == 0 {
@@ -153,8 +163,6 @@ func run() error {
 	if err := validateFnOSURL(base); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	client := NewFnOSClient(base, os.Getenv("FNOS_USERNAME"), os.Getenv("FNOS_PASSWORD"), os.Getenv("FNOS_TOKEN"))
 	if err := client.Login(ctx); err != nil {
 		return err
@@ -196,8 +204,16 @@ func collectTasks(o options) ([]task, error) {
 			return nil, err
 		}
 		result := make([]task, 0, len(actors))
+		skippedNumeric := 0
 		for _, actor := range actors {
+			if isNumericActorName(actor.name) {
+				skippedNumeric++
+				continue
+			}
 			result = append(result, task{name: actor.name, count: actor.count})
+		}
+		if skippedNumeric > 0 {
+			fmt.Printf("跳过 %d 个纯数字演员名称（无法按姓名查询上游资料）\n", skippedNumeric)
 		}
 		return result, nil
 	}
@@ -281,7 +297,7 @@ func processActor(ctx context.Context, client *FnOSClient, providers *ProviderSe
 		printExistingFieldSkip(detail, hasBio, hasImage, o.overwrite)
 		return nil
 	}
-	profile := cachedScrape(ctx, providers, name, o.cache, o.refresh)
+	profile, scrapeErr := cachedScrape(ctx, providers, name, o.cache, o.refresh)
 	if profile == nil || len(portraitCandidates(profile)) == 0 && profile.Biography == "" {
 		wanted := make([]string, 0, 2)
 		if canTryImage {
@@ -291,21 +307,34 @@ func processActor(ctx context.Context, client *FnOSClient, providers *ProviderSe
 			wanted = append(wanted, "简介")
 		}
 		fmt.Printf("  来源未找到可用%s；已有字段保持不变\n", strings.Join(wanted, "和"))
+		if isRetryableUpstreamError(scrapeErr) {
+			return scrapeErr
+		}
 		return nil
 	}
 	canBio := canTryBio && strings.TrimSpace(profile.Biography) != ""
 	canImage := canTryImage && len(portraitCandidates(profile)) > 0
 	if !canBio && !canImage {
 		printNoWritableFields(detail, profile, hasBio, hasImage, o.overwrite)
+		if isRetryableUpstreamError(scrapeErr) {
+			return scrapeErr
+		}
 		return nil
 	}
 	var image []byte
 	imageSource := ""
+	retryErr := scrapeErr
+	if !isRetryableUpstreamError(retryErr) {
+		retryErr = nil
+	}
 	if canImage {
 		for _, candidate := range portraitCandidates(profile) {
 			image, err = fetchPortrait(ctx, upstream, candidate.URL)
 			if err != nil {
 				fmt.Printf("  来源 %s 的头像处理失败，尝试下一来源：%v\n", candidate.Source, err)
+				if retryErr == nil && isRetryableUpstreamError(err) {
+					retryErr = err
+				}
 				continue
 			}
 			imageSource = candidate.Source
@@ -316,6 +345,9 @@ func processActor(ctx context.Context, client *FnOSClient, providers *ProviderSe
 			fmt.Println("  所有头像来源均处理失败，跳过头像")
 			if !canBio {
 				fmt.Printf("  简介无法更新：%s；跳过此演员\n", biographyBlockReason(detail, profile, hasBio, o.overwrite))
+				if retryErr != nil {
+					return retryErr
+				}
 				return nil
 			}
 		}
@@ -341,12 +373,12 @@ func processActor(ctx context.Context, client *FnOSClient, providers *ProviderSe
 		if canBio {
 			biography = &profile.Biography
 		}
-		if err := client.SaveProfile(ctx, detail, biography, profilePath); err != nil {
+		if err := client.SaveProfile(ctx, detail, name, biography, profilePath); err != nil {
 			return err
 		}
 		fmt.Println("  已写入飞牛演员档案")
 	}
-	return nil
+	return retryErr
 }
 
 func portraitCandidates(profile *ActorProfile) []PortraitCandidate {
@@ -422,32 +454,45 @@ func imageBlockReason(detail FnPerson, profile *ActorProfile, exists, overwrite 
 	return ""
 }
 
-func cachedScrape(ctx context.Context, providers *ProviderService, name, cache string, refresh bool) *ActorProfile {
+func cachedScrape(ctx context.Context, providers *ProviderService, name, cache string, refresh bool) (*ActorProfile, error) {
 	sum := sha256.Sum256([]byte(name))
 	file := filepath.Join(cache, "actors", hex.EncodeToString(sum[:])+".json")
 	if !refresh {
 		if info, err := os.Stat(file); err == nil && info.Size() <= 1<<20 && time.Since(info.ModTime()) < 30*24*time.Hour {
 			if data, err := os.ReadFile(file); err == nil {
 				var p ActorProfile
-				if json.Unmarshal(data, &p) == nil && (len(p.ImageCandidates) > 0 || strings.TrimSpace(p.ImageURL) == "") {
-					return &p
+				if json.Unmarshal(data, &p) == nil && strings.TrimSpace(p.Name) != "" && (len(p.ImageCandidates) > 0 || strings.TrimSpace(p.ImageURL) == "") {
+					return &p, nil
 				}
 			}
 		}
 	}
-	profile := providers.Scrape(ctx, name)
-	_ = os.MkdirAll(filepath.Dir(file), 0o750)
-	data, _ := json.Marshal(profile)
-	_ = os.WriteFile(file, data, 0o640)
-	return profile
+	profile, err := providers.Scrape(ctx, name)
+	if profile == nil || isRetryableUpstreamError(err) {
+		return profile, err
+	}
+	if err := os.MkdirAll(filepath.Dir(file), 0o750); err != nil {
+		return profile, fmt.Errorf("创建演员缓存目录失败：%w", err)
+	}
+	data, err := json.Marshal(profile)
+	if err != nil {
+		return profile, err
+	}
+	if err := writeFileAtomic(file, data, 0o640); err != nil {
+		return profile, fmt.Errorf("写入演员缓存失败：%w", err)
+	}
+	return profile, err
 }
 
 func probe(ctx context.Context, name string, o options) error {
 	started := time.Now()
 	upstream := NewUpstream()
 	providers := NewProviderService(upstream, o.cache, o.refresh)
-	profile := providers.Scrape(ctx, name)
+	profile, scrapeErr := providers.Scrape(ctx, name)
 	if profile == nil {
+		if isRetryableUpstreamError(scrapeErr) {
+			return scrapeErr
+		}
 		fmt.Printf("没有找到可用资料（耗时 %s）\n", time.Since(started).Round(time.Millisecond))
 		return nil
 	}
@@ -475,6 +520,9 @@ func probe(ctx context.Context, name string, o options) error {
 	runtime.GC()
 	runtime.ReadMemStats(&stats)
 	fmt.Printf("诊断完成：耗时 %s，GC 后 Go 堆占用 %.1f MiB，Go 运行时保留内存 %.1f MiB\n", time.Since(started).Round(time.Millisecond), float64(stats.HeapAlloc)/1048576, float64(stats.Sys)/1048576)
+	if isRetryableUpstreamError(scrapeErr) {
+		return scrapeErr
+	}
 	return nil
 }
 

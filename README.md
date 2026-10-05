@@ -50,19 +50,20 @@ ghcr.io/biaobiaobiao108/fnos-actor-scraper:latest
    vi .env
    ```
 
-   按下表填写 `.env`。用户名密码认证和 `FNOS_TOKEN` 二选一；设置了有效的 `FNOS_TOKEN` 时程序优先用 token。不要把包含真实凭据的 `.env` 上传到 GitHub。
+   按下表填写 `.env`。可以只用用户名密码登录，也可以使用 `FNOS_TOKEN`；设置 token 时程序优先使用它。长期监控建议同时配置用户名密码，token 过期后程序才能自动重新登录。不要把包含真实凭据的 `.env` 上传到 GitHub。
 
    | 变量 | 必填 | 用途与配置建议 |
    | --- | --- | --- |
    | `FNOS_URL` | 是 | 飞牛影视 API 地址。使用 `network_mode: host` 时通常设为 `http://127.0.0.1:5666`，即 NAS 本机回环地址。 |
    | `FNOS_USERNAME` | 使用账号密码时必填 | 有权限编辑飞牛影视演员资料的飞牛账号。 |
    | `FNOS_PASSWORD` | 使用账号密码时必填 | 上述账号密码。只保存在 NAS 的 `.env` 中。 |
-   | `FNOS_TOKEN` | 可选 | 当前有效的飞牛 API 会话 token。通常无需手动获取：程序用账号密码登录并自动取得 token；设置此项时程序优先使用它，过期后删除并改用账号密码。 |
+   | `FNOS_TOKEN` | 可选 | 当前有效的飞牛 API 会话 token。程序设置此项时优先用 token；若收到 HTTP 401，配置了用户名密码时会自动重新登录并重试一次。未设置时则用账号密码登录；只提供 token 时过期需手动更新。 |
    | `UPSTREAM_DELAY_MS` | 否 | 公网上游请求最小间隔，默认 `2000` 毫秒。遇到 403/429 时调大，避免频繁请求。 |
+   | `JAVDB_BASE_URL` | 否 | JavDB 可访问镜像的 HTTPS 基础地址，默认 `https://javdb570.com`。只接受公网 HTTPS 地址；镜像更换时在 `.env` 中调整。 |
    | `GOMEMLIMIT` | 否 | Go 运行时内存目标，默认 `640MiB`；Compose 容器硬限制是 `768m`。 |
    | `GOGC` | 否 | Go 垃圾回收目标，默认 `75`。一般保持默认即可。 |
    | `http_proxy`、`https_proxy` | 视网络而定 | 公网资料来源使用的 HTTP/HTTPS 代理。没有代理时留空；需要认证时可填 `http://用户名:密码@代理主机:端口`，特殊字符需进行 URL 编码。 |
-   | `no_proxy` | 否 | 逗号分隔的不走代理地址。保留 `localhost,127.0.0.1`，并按实际网络添加 NAS 地址/主机名。 |
+   | `no_proxy` | 否 | 逗号分隔的不走代理地址。默认包含 `localhost,127.0.0.1,::1`；如果将飞牛 API 配为其他地址，请把该主机加入此列表。 |
 
    `FNOS_DB_PATH` 和 `CACHE_DIR` 已由 Compose 分别设置为 `/fnos-db/trimmedia.db`、`/config`，通常不需要放进 `.env`。代理变量的大小写形式由 Compose 一并传入容器。
 

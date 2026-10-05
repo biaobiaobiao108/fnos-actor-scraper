@@ -64,34 +64,66 @@ func scanNFO(root string) (map[string]struct {
 		name  string
 		count int
 	})
-	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			fmt.Printf("跳过无法读取路径 %s：%v\n", path, walkErr)
+	visited := make(map[string]struct{})
+	var walk func(string) error
+	walk = func(path string) error {
+		info, err := os.Lstat(path)
+		if err != nil {
+			fmt.Printf("跳过无法读取路径 %s：%v\n", path, err)
 			return nil
 		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			if entry.IsDir() {
-				return filepath.SkipDir
+		if info.Mode()&os.ModeSymlink != 0 {
+			info, err = os.Stat(path)
+			if err != nil {
+				fmt.Printf("跳过失效符号链接 %s：%v\n", path, err)
+				return nil
+			}
+		}
+		if info.IsDir() {
+			realPath, err := filepath.EvalSymlinks(path)
+			if err != nil {
+				fmt.Printf("跳过无法解析的目录 %s：%v\n", path, err)
+				return nil
+			}
+			realPath, err = filepath.Abs(realPath)
+			if err == nil {
+				if _, exists := visited[realPath]; exists {
+					return nil
+				}
+				visited[realPath] = struct{}{}
+			}
+			entries, err := os.ReadDir(path)
+			if err != nil {
+				fmt.Printf("跳过无法读取目录 %s：%v\n", path, err)
+				return nil
+			}
+			for _, entry := range entries {
+				if err := walk(filepath.Join(path, entry.Name())); err != nil {
+					return err
+				}
 			}
 			return nil
 		}
-		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".nfo") {
+		if !strings.EqualFold(filepath.Ext(path), ".nfo") {
 			return nil
 		}
-		info, err := entry.Info()
-		if err != nil || info.Size() > maxNFOSize {
-			fmt.Printf("跳过过大的或无法读取的 NFO：%s\n", path)
+		if info.Size() > maxNFOSize {
+			fmt.Printf("跳过过大的 NFO：%s\n", path)
 			return nil
 		}
 		file, err := os.Open(path)
 		if err != nil {
+			fmt.Printf("跳过无法读取的 NFO %s：%v\n", path, err)
 			return nil
 		}
 		names, parseErr := parseNFO(io.LimitReader(file, maxNFOSize+1))
-		file.Close()
+		closeErr := file.Close()
 		if parseErr != nil {
 			fmt.Printf("跳过无法解析的 NFO %s：%v\n", path, parseErr)
 			return nil
+		}
+		if closeErr != nil {
+			fmt.Printf("关闭 NFO 文件失败 %s：%v\n", path, closeErr)
 		}
 		for _, name := range names {
 			key := normalizeName(name)
@@ -103,6 +135,9 @@ func scanNFO(root string) (map[string]struct {
 			actors[key] = prior
 		}
 		return nil
-	})
-	return actors, err
+	}
+	if err := walk(root); err != nil {
+		return actors, err
+	}
+	return actors, nil
 }

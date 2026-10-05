@@ -86,7 +86,13 @@ func processNewActors(ctx context.Context, client *FnOSClient, providers *Provid
 	}
 	fmt.Printf("发现 %d 个待处理演员，开始自动处理。\n", len(newTasks))
 	for _, item := range newTasks {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := processActor(ctx, client, providers, upstream, item, o); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			// Keep failed actors unseen so a later poll can retry transient failures.
 			fmt.Fprintf(os.Stderr, "%s 处理失败，将在后续轮询重试：%v\n", item.name, err)
 			continue
@@ -144,12 +150,7 @@ func writeWatchState(path string, state watchState) error {
 	if err != nil {
 		return err
 	}
-	temporary := path + ".tmp"
-	if err := os.WriteFile(temporary, data, 0o600); err != nil {
-		return fmt.Errorf("写入监控状态失败：%w", err)
-	}
-	if err := os.Rename(temporary, path); err != nil {
-		_ = os.Remove(temporary)
+	if err := writeFileAtomic(path, data, 0o600); err != nil {
 		return fmt.Errorf("更新监控状态失败：%w", err)
 	}
 	return nil

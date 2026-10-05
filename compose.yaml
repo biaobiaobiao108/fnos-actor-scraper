@@ -18,14 +18,15 @@ x-fnactor-common: &fnactor-common
     FNOS_PASSWORD: ${FNOS_PASSWORD}
     FNOS_TOKEN: ${FNOS_TOKEN:-}
     UPSTREAM_DELAY_MS: ${UPSTREAM_DELAY_MS:-2000}
+    JAVDB_BASE_URL: ${JAVDB_BASE_URL:-https://javdb570.com}
     GOMEMLIMIT: ${GOMEMLIMIT:-640MiB}
     GOGC: ${GOGC:-75}
     http_proxy: ${http_proxy:-}
     https_proxy: ${https_proxy:-}
     HTTP_PROXY: ${http_proxy:-}
     HTTPS_PROXY: ${https_proxy:-}
-    no_proxy: ${no_proxy:-localhost,127.0.0.1,192.168.31.86,192.168.31.228,flymoo}
-    NO_PROXY: ${no_proxy:-localhost,127.0.0.1,192.168.31.86,192.168.31.228,flymoo}
+    no_proxy: ${no_proxy:-localhost,127.0.0.1,::1}
+    NO_PROXY: ${no_proxy:-localhost,127.0.0.1,::1}
   volumes:
     # SQLite opens the DB in mode=ro; the directory must allow transient WAL/SHM lock handling.
     - type: bind

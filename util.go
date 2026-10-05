@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"unicode"
 
@@ -10,6 +12,35 @@ import (
 )
 
 func jsonUnmarshal(data []byte, destination any) error { return json.Unmarshal(data, destination) }
+
+func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
+	directory := filepath.Dir(path)
+	file, err := os.CreateTemp(directory, "."+filepath.Base(path)+"-*.tmp")
+	if err != nil {
+		return fmt.Errorf("创建临时文件失败：%w", err)
+	}
+	temporary := file.Name()
+	defer os.Remove(temporary)
+	if err := file.Chmod(mode); err != nil {
+		file.Close()
+		return fmt.Errorf("设置临时文件权限失败：%w", err)
+	}
+	if _, err := file.Write(data); err != nil {
+		file.Close()
+		return fmt.Errorf("写入临时文件失败：%w", err)
+	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		return fmt.Errorf("同步临时文件失败：%w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("关闭临时文件失败：%w", err)
+	}
+	if err := os.Rename(temporary, path); err != nil {
+		return fmt.Errorf("原子替换目标文件失败：%w", err)
+	}
+	return nil
+}
 
 func getenv(name, fallback string) string {
 	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
@@ -28,39 +59,6 @@ func normalizeName(value string) string {
 		result.WriteRune(r)
 	}
 	return result.String()
-}
-
-func nameSimilarity(left, right string) float64 {
-	a, b := normalizeName(left), normalizeName(right)
-	if a == "" || b == "" {
-		return 0
-	}
-	if a == b || strings.Contains(a, b) || strings.Contains(b, a) {
-		return 1
-	}
-	rightSet := make(map[rune]struct{})
-	for _, r := range b {
-		rightSet[r] = struct{}{}
-	}
-	shared := 0
-	for _, r := range a {
-		if _, exists := rightSet[r]; exists {
-			shared++
-		}
-	}
-	denominator := max(runeCount(a), len(rightSet))
-	if denominator == 0 {
-		return 0
-	}
-	return float64(shared) / float64(denominator)
-}
-
-func runeCount(value string) int {
-	count := 0
-	for range value {
-		count++
-	}
-	return count
 }
 
 func unique(values []string) []string {

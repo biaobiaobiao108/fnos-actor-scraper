@@ -16,12 +16,15 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 type FnOSClient struct {
 	base, username, password, token string
 	client                          *http.Client
+	authMu                          sync.Mutex
+	tokenMu                         sync.RWMutex
 }
 
 func NewFnOSClient(base, username, password, token string) *FnOSClient {
@@ -49,14 +52,51 @@ func (err *fnosAPIError) Error() string {
 func (client *FnOSClient) request(ctx context.Context, path string, method string, body io.Reader, contentType string, destination any) error {
 	var bodyBytes []byte
 	if body != nil {
-		var err error
-		bodyBytes, err = io.ReadAll(io.LimitReader(body, defaultBodyLimit+1))
+		data, err := io.ReadAll(io.LimitReader(body, defaultBodyLimit+1))
 		if err != nil {
 			return err
 		}
-		if int64(len(bodyBytes)) > defaultBodyLimit {
+		if int64(len(data)) > defaultBodyLimit {
 			return fmt.Errorf("FnOS API 请求体超过 16 MiB")
 		}
+		bodyBytes = data
+	}
+	hasBody := body != nil
+	token := client.tokenValue()
+	err := client.requestOnce(ctx, path, method, bodyBytes, hasBody, contentType, destination)
+	if !isFnOSUnauthorized(err) {
+		return err
+	}
+	if client.username == "" || client.password == "" {
+		return fmt.Errorf("FnOS 会话已过期（HTTP 401）；配置 FNOS_USERNAME 和 FNOS_PASSWORD 后才能自动重新登录，当前仅配置了 token")
+	}
+	client.authMu.Lock()
+	defer client.authMu.Unlock()
+	if client.token == token {
+		if err := client.loginLocked(ctx); err != nil {
+			return fmt.Errorf("FnOS 会话过期后重新登录失败：%w", err)
+		}
+	}
+	return client.requestOnce(ctx, path, method, bodyBytes, hasBody, contentType, destination)
+}
+
+func (client *FnOSClient) tokenValue() string {
+	client.tokenMu.RLock()
+	defer client.tokenMu.RUnlock()
+	return client.token
+}
+
+func isFnOSUnauthorized(err error) bool {
+	apiErr, ok := err.(*fnosAPIError)
+	return ok && apiErr.statusCode == http.StatusUnauthorized
+}
+
+func (client *FnOSClient) requestOnce(ctx context.Context, path string, method string, bodyBytes []byte, hasBody bool, contentType string, destination any) error {
+	if int64(len(bodyBytes)) > defaultBodyLimit {
+		return fmt.Errorf("FnOS API 请求体超过 16 MiB")
+	}
+	var body io.Reader
+	if hasBody {
 		body = bytes.NewReader(bodyBytes)
 	}
 	request, err := http.NewRequestWithContext(ctx, method, client.base+path, body)
@@ -67,8 +107,8 @@ func (client *FnOSClient) request(ctx context.Context, path string, method strin
 	request.Header.Set("X-Trim-Client", "web")
 	request.Header.Set("X-Trim-Client-Version", "631")
 	request.Header.Set("authx", fnosSignature(request, bodyBytes, contentType))
-	if client.token != "" {
-		request.Header.Set("authorization", client.token)
+	if token := client.tokenValue(); token != "" {
+		request.Header.Set("authorization", token)
 	}
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
@@ -87,6 +127,9 @@ func (client *FnOSClient) request(ctx context.Context, path string, method strin
 	}
 	var envelope apiEnvelope
 	if err := json.Unmarshal(data, &envelope); err != nil {
+		if response.StatusCode == http.StatusUnauthorized {
+			return &fnosAPIError{path: path, message: "会话已过期", statusCode: response.StatusCode}
+		}
 		return fmt.Errorf("FnOS API %s 返回非 JSON 响应（HTTP %d，Content-Type %s）：%w；请检查 FNOS_URL、容器网络模式和 NO_PROXY", path, response.StatusCode, response.Header.Get("Content-Type"), err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 || envelope.Code != nil && *envelope.Code != 0 {
@@ -160,23 +203,32 @@ func md5Hex(data []byte) string {
 }
 
 func (client *FnOSClient) Login(ctx context.Context) error {
+	client.authMu.Lock()
+	defer client.authMu.Unlock()
 	if client.token != "" {
 		return nil
 	}
+	return client.loginLocked(ctx)
+}
+
+func (client *FnOSClient) loginLocked(ctx context.Context) error {
 	if client.username == "" || client.password == "" {
 		return fmt.Errorf("请设置 FNOS_USERNAME 和 FNOS_PASSWORD，或提供 FNOS_TOKEN")
 	}
+	client.tokenMu.Lock()
+	client.token = ""
+	client.tokenMu.Unlock()
 	hash := sha256.Sum256([]byte(client.password))
 	body, _ := json.Marshal(map[string]string{"username": client.username, "password": hex.EncodeToString(hash[:]), "app_name": "trimemedia-web"})
 	var result struct {
 		Token string `json:"token"`
 	}
-	err := client.request(ctx, "/user/loginByPassword?channel=v2", http.MethodPost, bytes.NewReader(body), "application/json", &result)
+	err := client.requestOnce(ctx, "/user/loginByPassword?channel=v2", http.MethodPost, body, true, "application/json", &result)
 	if apiErr, ok := err.(*fnosAPIError); ok && strings.EqualFold(apiErr.message, "Invalid Params") {
 		// Some FnOS versions still expose only the legacy login endpoint. The web UI
 		// uses this same endpoint with the original password when v2 is unavailable.
 		legacyBody, _ := json.Marshal(map[string]string{"username": client.username, "password": client.password, "app_name": "trimemedia-web"})
-		err = client.request(ctx, "/login", http.MethodPost, bytes.NewReader(legacyBody), "application/json", &result)
+		err = client.requestOnce(ctx, "/login", http.MethodPost, legacyBody, true, "application/json", &result)
 	}
 	if err != nil {
 		return err
@@ -184,7 +236,9 @@ func (client *FnOSClient) Login(ctx context.Context) error {
 	if result.Token == "" {
 		return fmt.Errorf("飞牛登录响应中没有 token；请检查 FnOS 版本或登录接口兼容性")
 	}
+	client.tokenMu.Lock()
 	client.token = result.Token
+	client.tokenMu.Unlock()
 	return nil
 }
 
@@ -245,14 +299,14 @@ func (client *FnOSClient) UploadProfile(ctx context.Context, image []byte) (stri
 	return result.HashPath, nil
 }
 
-func (client *FnOSClient) SaveProfile(ctx context.Context, person FnPerson, biography, profilePath *string) error {
+func (client *FnOSClient) SaveProfile(ctx context.Context, person FnPerson, fallbackName string, biography, profilePath *string) error {
 	if biography == nil {
 		biography = &person.Biography
 	}
 	if profilePath == nil {
 		profilePath = &person.ProfilePath
 	}
-	body, _ := json.Marshal(map[string]any{"guid": person.GUID, "is_official": person.IsOfficial, "name": firstNonempty(person.Name, person.OriginalName),
+	body, _ := json.Marshal(map[string]any{"guid": person.GUID, "is_official": person.IsOfficial, "name": firstNonempty(person.Name, person.OriginalName, fallbackName),
 		"name_locked": person.NameLocked, "biography": *biography, "biography_locked": person.BiographyLocked,
 		"profile_path": *profilePath, "profile_path_locked": person.ProfilePathLocked})
 	return client.request(ctx, "/person/saveEditDetail", http.MethodPost, bytes.NewReader(body), "application/json", nil)

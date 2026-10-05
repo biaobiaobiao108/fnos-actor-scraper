@@ -9,7 +9,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var requiredPersonColumns = []string{"guid", "trim_id", "tmdb_id", "imdb_id", "name", "original_name"}
+var requiredPersonColumns = []string{"guid", "trim_id", "tmdb_id", "imdb_id", "name", "original_name", "biography", "profile_path"}
 
 func loadLocalPeople(path string) ([]FnPerson, error) {
 	absolute, err := filepath.Abs(path)

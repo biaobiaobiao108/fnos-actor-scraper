@@ -76,16 +76,17 @@ docker compose --profile watch stop fnactor-watch
 | `FNOS_URL` | 是 | 飞牛影视 API 地址；host 网络推荐 `http://127.0.0.1:5666` |
 | `FNOS_USERNAME` | 与密码配合 | 飞牛登录用户名 |
 | `FNOS_PASSWORD` | 与用户名配合 | 飞牛登录密码；仅保存在秘密配置中 |
-| `FNOS_TOKEN` | 可选 | 当前有效的飞牛 API token；如果设置则使用有效 token 认证 |
+| `FNOS_TOKEN` | 可选 | 优先使用当前有效的飞牛 API token；配合账号密码可在 HTTP 401 后自动重新登录 |
 | `FNOS_DB_PATH` | 批量模式需要 | 容器内数据库文件路径，Compose 默认 `/fnos-db/trimmedia.db` |
 | `CACHE_DIR` | 否 | 在线来源缓存根目录，默认 `/config` |
 | `UPSTREAM_DELAY_MS` | 否 | 公网上游最小请求间隔，默认 2000 毫秒；请求仍经过全局串行队列 |
+| `JAVDB_BASE_URL` | 否 | JavDB 公网 HTTPS 镜像基础地址，默认 `https://javdb570.com` |
 | `HTTP_PROXY` / `http_proxy` | 否 | 公网来源 HTTP 代理 |
 | `HTTPS_PROXY` / `https_proxy` | 否 | 公网来源 HTTPS 代理 |
-| `NO_PROXY` / `no_proxy` | 否 | 不经代理访问的地址；至少包含 `localhost,127.0.0.1` |
+| `NO_PROXY` / `no_proxy` | 否 | 不经代理访问的地址；默认包含 `localhost,127.0.0.1,::1` |
 | `GOMEMLIMIT` | 否 | Go 运行时内存目标；容器推荐 `640MiB` |
 
-代理变量应由部署环境提供，切勿写进源码、镜像或文档中的真实凭据示例。代理仅供公网来源使用；飞牛 API 必须直连本机 loopback。`.env` 含敏感信息，应限制读取权限并确认 Git 忽略。
+代理变量应由部署环境提供，切勿写进源码、镜像或文档中的真实凭据示例。代理仅供公网来源使用；飞牛 API 必须直连本机 loopback。`.env` 含敏感信息，应限制读取权限并确认 Git 忽略。会话 token 返回 HTTP 401 时，如果同时配置了账号密码，程序会自动重新登录并重试该请求一次；只配置 token 时需手动提供新 token。
 
 ## Docker 部署（飞牛 OS）
 
