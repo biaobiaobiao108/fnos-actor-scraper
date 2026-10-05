@@ -25,11 +25,10 @@ services:
       no_proxy: ${no_proxy:-localhost,127.0.0.1,192.168.31.86,192.168.31.228,flymoo}
       NO_PROXY: ${no_proxy:-localhost,127.0.0.1,192.168.31.86,192.168.31.228,flymoo}
     volumes:
-      # Read-only actor/person records from the current FnOS Media database directory.
+      # SQLite opens the DB in mode=ro; the directory must allow transient WAL/SHM lock handling.
       - type: bind
         source: /usr/local/apps/@appdata/trim.media/database
         target: /fnos-db
-        read_only: true
       - type: bind
         source: /vol1/docker/fnactor-cache
         target: /config

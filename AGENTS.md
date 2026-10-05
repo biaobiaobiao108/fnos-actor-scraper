@@ -21,7 +21,7 @@
 ## 数据边界与候选筛选
 
 - 默认从当前飞牛影视数据库的 `person` 表读取候选；只接纳 `trim_id` 以 `LOCAL_PERSON_` 开头、无 TMDb/IMDb 标识的本地人物记录。
-- 数据库以只读模式打开。数据库挂载需只读，且包括同目录 SQLite WAL/SHM 文件；不得执行 SQL 写入，不得改动 DB、WAL 或 SHM。
+- 数据库以 SQLite `mode=ro` 打开，程序不得执行 SQL 写入。挂载数据库目录时不能设置 Docker `read_only`：SQLite WAL 模式需要目录可写以处理临时 SHM 锁；不得写入数据库记录或 WAL 数据。
 - 写入前通过飞牛 API 重新读取编辑详情，验证目标仍是本地档案、非官方人物，并检查字段锁定状态。
 - 默认只补缺失头像和简介；已齐全时跳过。`--overwrite --apply` 仅允许覆盖本地且未锁定的资料字段。
 - 远程来源属于飞牛官方或已有在线身份标识的档案应跳过，不能通过 `--overwrite` 绕过保护。
@@ -49,7 +49,7 @@
 
 ## NAS 部署事实与兼容性
 
-当前用户 NAS `flymoo` 曾核实的飞牛影视数据库目录为 `/usr/local/apps/@appdata/trim.media/database`，主库为 `trimmedia.db`，应整体只读挂载至 `/fnos-db`。路径是 FnOS 内部实现，其他设备或系统更新后可能变化。应用图片目录由飞牛管理，程序无需挂载。
+当前用户 NAS `flymoo` 曾核实的飞牛影视数据库目录为 `/usr/local/apps/@appdata/trim.media/database`，主库为 `trimmedia.db`，挂载至 `/fnos-db`。SQLite 连接保持 `mode=ro`；Docker 目录挂载需可写，以便 SQLite 处理 WAL/SHM 锁。路径是 FnOS 内部实现，其他设备或系统更新后可能变化。应用图片目录由飞牛管理，程序无需挂载。
 
 用户 NAS 上 `/vol1/video/movies` 不存在。默认也不需要任何媒体目录；若 `--root` 扫描 NFO，挂载用户实际存在且含 NFO 的路径即可。
 

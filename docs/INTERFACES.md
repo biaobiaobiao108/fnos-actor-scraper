@@ -77,7 +77,7 @@ docker compose run --rm fnactor --actor '三上悠亚' --overwrite --apply
 
 1. 从 `.env.example` 创建 `.env`，填写飞牛认证信息和所需代理环境变量；不要提交该文件。
 2. 确认 FnOS 数据库目录实际存在。用户当前 NAS 上的已核实路径为 `/usr/local/apps/@appdata/trim.media/database`，其他设备/升级后可能不同。
-3. 将数据库**目录**只读挂载至 `/fnos-db`，并将可写缓存目录持久化到 `/config`。
+3. 将数据库**目录**挂载至 `/fnos-db`，并将可写缓存目录持久化到 `/config`。数据库连接为 SQLite `mode=ro`，但 Docker 挂载目录本身不能只读，否则 WAL 模式需要的 `-shm` 锁文件无法处理。
 4. 使用 host 网络并把 `FNOS_URL` 设置为 `http://127.0.0.1:5666`；确保 `NO_PROXY` 包含 `localhost,127.0.0.1`。
 5. 容器设置 `GOMEMLIMIT=640MiB` 和 `mem_limit: 768m`。Go 内存目标不是 cgroup 硬上限；后者才是容器的硬边界。
 6. 先小批量预览，确认人物和待补字段，再使用 `--apply` 实际更新。
@@ -89,7 +89,6 @@ volumes:
   - type: bind
     source: /usr/local/apps/@appdata/trim.media/database
     target: /fnos-db
-    read_only: true
   - type: bind
     source: /vol1/docker/fnactor-cache
     target: /config
@@ -129,7 +128,7 @@ volumes:
 
 ## 故障排查
 
-- **数据库打不开**：检查整个数据库目录是否只读挂载，确认 `/fnos-db/trimmedia.db` 及可能的 WAL/SHM 文件可见。
+- **数据库打不开**：确认 `/fnos-db/trimmedia.db` 及可能的 WAL/SHM 文件可见，并检查 Docker 是否错误地把数据库目录设为只读。SQLite 连接自身是只读的，但 WAL 模式需要目录可写以处理 `-shm` 锁文件。
 - **数据库 schema 不兼容**：飞牛可能更新了内部数据库结构；确认实际 `person` 列名后更新适配，不要直接猜列或改库。
 - **登录失败**：检查 `FNOS_URL`、账户密码/token 和编辑权限；host 网络推荐回环 API 地址，并确认代理绕过列表含 `127.0.0.1`。
 - **公网来源超时**：检查容器代理变量、代理可达性和 DNS；避免把飞牛 API 地址放进代理链路。

@@ -64,10 +64,10 @@ ghcr.io/biaobiaobiao108/fnos-actor-scraper:latest
 
    `FNOS_DB_PATH` 和 `CACHE_DIR` 已由 Compose 分别设置为 `/fnos-db/trimmedia.db`、`/config`，通常不需要放进 `.env`。代理变量的大小写形式由 Compose 一并传入容器。
 
-4. 核对 Compose 中的飞牛影视数据库路径。默认配置将数据库目录以只读方式挂载：
+4. 核对 Compose 中的飞牛影视数据库路径。默认配置挂载数据库目录：
 
    ```text
-   /usr/local/apps/@appdata/trim.media/database:/fnos-db:ro
+   /usr/local/apps/@appdata/trim.media/database:/fnos-db
    ```
 
    这是当前用户 NAS 上核实过的路径，其他飞牛安装可能不同。确认目录和数据库文件存在：
@@ -76,7 +76,7 @@ ghcr.io/biaobiaobiao108/fnos-actor-scraper:latest
    ls -la /usr/local/apps/@appdata/trim.media/database
    ```
 
-   应能看到 `trimmedia.db`。如果实际路径不同，编辑 `compose.yaml` 中数据库 bind mount 的 `source`，指向**包含 `trimmedia.db` 的整个目录**，不要只挂载单个数据库文件；SQLite 还可能需要同目录 WAL/SHM 文件。数据库卷必须保持只读。缓存卷默认是 `/vol1/docker/fnactor-cache:/config`，需要可写；若更换目录，也修改该 bind mount 的 `source` 并确保 NAS 目录已创建。
+   应能看到 `trimmedia.db`。如果实际路径不同，编辑 `compose.yaml` 中数据库 bind mount 的 `source`，指向**包含 `trimmedia.db` 的整个目录**，不要只挂载单个数据库文件；SQLite 还需要同目录的 WAL/SHM 文件。这个挂载不要设置 `read_only: true`：SQLite 在 `mode=ro` 查询数据库内容时，仍需在 WAL 模式下处理 `-shm` 锁文件。程序自身以只读模式连接数据库，只执行查询，不会更新演员表。缓存卷默认是 `/vol1/docker/fnactor-cache:/config`，需要可写；若更换目录，也修改该 bind mount 的 `source` 并确保 NAS 目录已创建。
 
 5. 拉取镜像并先做预览。GitHub Actions 成功后会发布 `latest` 镜像；更新部署时也先拉取最新镜像：
 
@@ -104,7 +104,7 @@ ghcr.io/biaobiaobiao108/fnos-actor-scraper:latest
 
 ### Compose 挂载与网络说明
 
-默认批量模式直接从只读的飞牛影视 `person` 数据库表枚举本地演员，不需要媒体目录，也不需要挂载飞牛私有图片目录。只有使用 `--root` 扫描 NFO 筛选任务时，才需在 `compose.yaml` 的 `volumes` 增加媒体目录只读 bind mount，并把容器内路径传给 `--root`。当前 NAS 上 `/vol1/video/movies` 不存在，请使用飞牛媒体库中实际存在的路径。
+默认批量模式通过 SQLite 只读连接从飞牛影视 `person` 数据库表枚举本地演员，不需要媒体目录，也不需要挂载飞牛私有图片目录。只有使用 `--root` 扫描 NFO 筛选任务时，才需在 `compose.yaml` 的 `volumes` 增加媒体目录只读 bind mount，并把容器内路径传给 `--root`。当前 NAS 上 `/vol1/video/movies` 不存在，请使用飞牛媒体库中实际存在的路径。
 
 Compose 使用 `network_mode: host`，这样容器可访问 NAS 本机的 `http://127.0.0.1:5666` API。公网抓取请求可通过 `http_proxy`、`https_proxy` 走代理；`no_proxy`/`NO_PROXY` 必须包含回环地址，否则本机飞牛 API 可能被代理。
 

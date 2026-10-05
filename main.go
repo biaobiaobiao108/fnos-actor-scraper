@@ -173,7 +173,7 @@ func collectTasks(o options) ([]task, error) {
 	}
 	people, err := loadLocalPeople(o.database)
 	if err != nil {
-		return nil, fmt.Errorf("读取飞牛演员数据库失败：%w", err)
+		return nil, fmt.Errorf("读取飞牛演员数据库失败：%w；请确认数据库路径存在且数据库目录未设为 Docker 只读挂载（程序以 mode=ro 查询，WAL 模式仍需要处理临时 SHM 锁文件）", err)
 	}
 	result := make([]task, 0, len(people))
 	for index := range people {
