@@ -52,6 +52,7 @@
 - 演员并发默认 1，最大 2；一个演员的多个来源依次请求。不能让提高演员并发绕过上游队列。
 - 上游响应默认限制为 16 MiB；头像原图不超过 10 MiB/1600 万像素，输出不超过 4 MiB。sharp 缓存限制 32 MiB、内部并发 1；调整这些限制时同步维护中文文档。
 - Compose 容器内存 cgroup 上限为 768 MiB；调高需结合 NAS `docker stats` 的实际峰值。
+- 当前 Compose 使用 host 网络，FnOS API 优先通过 NAS loopback `http://127.0.0.1:5666` 连接；不得全局关闭 TLS 校验。
 - 登录口令、令牌、Authorization header 不得写入日志或提交。
 
 ## 开发与交付规范

@@ -1,5 +1,4 @@
-import { createHash, X509Certificate } from "node:crypto";
-import type { PeerCertificate } from "node:tls";
+import { createHash } from "node:crypto";
 import type { FnPerson } from "./types.ts";
 
 type ApiResult<T> = { code?: number; msg?: string; message?: string; data?: T };
@@ -7,35 +6,10 @@ type ApiResult<T> = { code?: number; msg?: string; message?: string; data?: T };
 export class FnOSClient {
   private token?: string;
   private readonly base: string;
-  private readonly caFile?: string;
-  private tlsOptions?: Promise<Bun.TLSOptions>;
 
-  constructor(baseUrl: string, private readonly username: string, private readonly password: string, token?: string, caFile?: string) {
+  constructor(baseUrl: string, private readonly username: string, private readonly password: string, token?: string) {
     this.base = `${baseUrl.replace(/\/+$/, "")}/v/api/v1`;
     this.token = token;
-    this.caFile = caFile;
-  }
-
-  private getTlsOptions(): Promise<Bun.TLSOptions> | undefined {
-    if (!this.caFile) return undefined;
-    if (!this.tlsOptions) {
-      this.tlsOptions = (async () => {
-        const ca = await Bun.file(this.caFile!).text();
-        const fingerprint = new X509Certificate(ca).fingerprint256?.replaceAll(":", "").toLowerCase();
-        if (!fingerprint) throw new Error("无法读取 FnOS 证书 SHA-256 指纹");
-        return {
-          ca,
-          // FnOS can ship a self-signed certificate with CN=fnOS and no IP SAN.
-          // Keep chain validation enabled and pin this exact certificate instead
-          // of disabling TLS checks globally.
-          checkServerIdentity: (_hostname: string, certificate: PeerCertificate): Error | undefined =>
-            certificate.fingerprint256?.replaceAll(":", "").toLowerCase() === fingerprint
-              ? undefined
-              : new Error("FnOS TLS 证书指纹不匹配"),
-        };
-      })();
-    }
-    return this.tlsOptions;
   }
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -43,13 +17,7 @@ export class FnOSClient {
     headers.set("accept", "application/json");
     if (this.token) headers.set("authorization", this.token);
     if (init.body && !(init.body instanceof FormData)) headers.set("content-type", "application/json");
-    const tls = this.getTlsOptions();
-    const response = await fetch(`${this.base}${path}`, {
-      ...init,
-      headers,
-      signal: AbortSignal.timeout(20_000),
-      ...(tls ? { tls: await tls } : {}),
-    });
+    const response = await fetch(`${this.base}${path}`, { ...init, headers, signal: AbortSignal.timeout(20_000) });
     const body = await response.json() as ApiResult<T>;
     if (!response.ok || (typeof body.code === "number" && body.code !== 0)) {
       throw new Error(`FnOS API ${path}: ${body.msg || body.message || response.statusText} (${response.status}/${body.code ?? "?"})`);

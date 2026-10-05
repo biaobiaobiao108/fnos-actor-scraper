@@ -95,16 +95,13 @@ ghcr.io/biaobiaobiao108/fnos-actor-scraper:latest
 | `FNOS_USERNAME` | 二选一 | 飞牛登录用户名 |
 | `FNOS_PASSWORD` | 二选一 | 飞牛登录密码 |
 | `FNOS_TOKEN` | 二选一 | 当前有效的 API token，优先于用户名/密码 |
-| `FNOS_CA_FILE` | 否 | 自签名 FnOS HTTPS 证书在容器内的路径；只影响 FnOS API TLS 信任 |
-| `FNOS_CA_SOURCE` | 否 | Compose 主机上的证书文件路径，默认挂载 `/dev/null`（不额外信任证书） |
 | `FNOS_DB_PATH` | 批量模式需要 | 容器内数据库文件，Compose 默认 `/fnos-db/trimmedia.db` |
 | `CACHE_DIR` | 否 | 在线资料缓存目录，默认 `/config` |
 | `UPSTREAM_DELAY_MS` | 否 | 上游 HTTP 请求最小间隔，默认 2000 毫秒，限制在 500–60000 毫秒 |
 | `http_proxy` / `https_proxy` | 否 | 公网来源访问代理；Compose 同时导出大写变量名 |
 | `no_proxy` | 否 | 代理绕过列表，默认包含本机、NAS 与代理所在主机 |
 
-密码以明文保存在 `.env`，应限制文件权限并勿提交 Git。`FNOS_URL` 应使用 HTTPS 和有效证书。
-若 NAS 使用自签名证书，可将服务器证书导出为 PEM，设置 `FNOS_CA_SOURCE` 指向该文件、`FNOS_CA_FILE=/fnos-ca.pem`。该证书通过只读挂载，仅用于 FnOS API TLS 校验；不要设置全局 `NODE_TLS_REJECT_UNAUTHORIZED=0`。
+密码以明文保存在 `.env`，应限制文件权限并勿提交 Git。远程访问 FnOS 时必须使用 HTTPS 和有效证书；当前 Compose 使用 host 网络，建议将 `FNOS_URL` 设为 `http://127.0.0.1:5666`。该连接经容器所在 NAS 的 loopback 访问，不经过代理或 LAN；飞牛自签名 HTTPS 证书不会拦截 API 请求。程序仅允许 localhost/127.0.0.1 使用 HTTP。
 
 ## 批量并发与上游限流
 

@@ -20,9 +20,8 @@
 ghcr.io/biaobiaobiao108/fnos-actor-scraper:latest
 ```
 
-复制 `.env.example` 为 `.env`，填写 `FNOS_URL` 和登录用户名/密码（或当前有效的 `FNOS_TOKEN`）。密码以明文保存在 `.env`，请限制文件权限并勿提交到 Git。
+复制 `.env.example` 为 `.env`，填写飞牛登录用户名/密码（或当前有效的 `FNOS_TOKEN`）。Compose 使用 host 网络，建议 `FNOS_URL=http://127.0.0.1:5666`，让容器经 NAS 本机回环地址访问飞牛 API，避开自签名证书和公网代理。密码以明文保存在 `.env`，请限制文件权限并勿提交到 Git。
 如果访问公网来源需要代理，可在 `.env` 中设置 `http_proxy` 与 `https_proxy`；Compose 会同时传入大小写两种环境变量。`no_proxy` 默认包含 NAS 地址，保证飞牛 API 连接直达 NAS。
-如果飞牛 Web 使用自签名证书，将 NAS 的证书以只读方式挂载，并设置 `FNOS_CA_FILE` / `FNOS_CA_SOURCE`。程序只对飞牛 API 请求信任该证书，仍验证 TLS；不要通过全局关闭证书验证绕过错误。
 
 默认 Compose 会挂载以下目录：
 
