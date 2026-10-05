@@ -82,7 +82,7 @@ docker compose run --rm fnactor --actor '三上悠亚' --overwrite --apply
 - 使用标准库 `net/http`、`encoding/json`、`encoding/xml`，以 `goquery` 解析来源 HTML。
 - 使用 `modernc.org/sqlite` 只读访问飞牛影视 `person` 表。
 - 使用 `golang.org/x/image/webp` 和标准库 JPEG 解码器处理头像，转换为 640×960 JPEG 后经飞牛 API 上传。
-- 在线来源包括 Gfriends、Minnano-AV、Wikipedia 和 Wikidata；可选配置 ThePornDB API token 增加演员简介和头像来源。缓存存放在 `/config`。
+- 在线来源包括 Gfriends、Minnano-AV、Wikipedia 和 Wikidata。缓存存放在 `/config`。
 - 飞牛 API 是其 Web 前端使用的内部接口，飞牛版本升级时可能变化。
 
 详细架构、接口、部署配置与故障排查见[实现与架构](docs/ARCHITECTURE.md)和[接口与使用说明](docs/INTERFACES.md)。项目协作规范见 [AGENTS.md](AGENTS.md)。

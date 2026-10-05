@@ -13,7 +13,7 @@
 - `modernc.org/sqlite` 以只读模式访问 FnOS 数据库，避免依赖 CGO。
 - `golang.org/x/image/webp` 与标准 JPEG 图像处理能力用于读取头像；统一转换为 640×960 JPEG。
 - FnOS API 客户端经飞牛影视内部 Web API 读取和保存人物档案。
-- 来源适配器获取 Gfriends、Minnano-AV、Wikipedia、Wikidata 资料，并可选连接 ThePornDB API；缓存放入 `/config/actors`。
+- 来源适配器获取 Gfriends、Minnano-AV、Wikipedia、Wikidata 资料；缓存放入 `/config/actors`。
 
 ## 输入和候选人筛选
 

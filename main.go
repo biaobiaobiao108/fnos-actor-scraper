@@ -281,9 +281,6 @@ func cachedScrape(ctx context.Context, providers *ProviderService, name, cache s
 
 func probe(ctx context.Context, name string, o options) error {
 	started := time.Now()
-	if strings.TrimSpace(os.Getenv("TPDB_API_TOKEN")) == "" {
-		fmt.Println("ThePornDB：未配置 TPDB_API_TOKEN，已跳过（可选来源）")
-	}
 	upstream := NewUpstream()
 	providers := NewProviderService(upstream, o.cache, o.refresh)
 	profile := providers.Scrape(ctx, name)

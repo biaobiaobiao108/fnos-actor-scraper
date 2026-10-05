@@ -13,7 +13,7 @@
 - `goquery` 解析 HTML 来源。
 - `modernc.org/sqlite` 只读访问飞牛影视 SQLite `person` 表；使用纯 Go SQLite 实现，不直接写数据库。
 - `golang.org/x/image/webp` 和标准库 `image/jpeg` 相关解码能力处理头像；转换为 640×960 JPEG，再经飞牛 API 上传。
-- 在线来源适配器负责 Gfriends、Minnano-AV、Wikipedia、Wikidata，并可选支持需要 API token 的 ThePornDB；缓存写入 `/config/actors`。
+- 在线来源适配器负责 Gfriends、Minnano-AV、Wikipedia、Wikidata；缓存写入 `/config/actors`。
 - 飞牛 API 登录、搜索、读取编辑详情、上传头像和保存档案由 FnOS 客户端模块负责。
 
 实现 Go 迁移时建议按职责拆分 CLI/调度、FnOS API、只读数据库、NFO 扫描、来源适配器、图片转换、上游限流与缓存模块。模块可按 Go 包结构调整；文档和部署参数也要同步。

@@ -18,17 +18,16 @@ import (
 const gfriendsTreeURL = "https://cdn.jsdelivr.net/gh/gfriends/gfriends@master/Filetree.json"
 
 type ProviderService struct {
-	upstream  *Upstream
-	cacheDir  string
-	refresh   bool
-	tpdbToken string
-	treeOnce  sync.Once
-	tree      map[string]any
-	treeErr   error
+	upstream *Upstream
+	cacheDir string
+	refresh  bool
+	treeOnce sync.Once
+	tree     map[string]any
+	treeErr  error
 }
 
 func NewProviderService(upstream *Upstream, cacheDir string, refresh bool) *ProviderService {
-	return &ProviderService{upstream: upstream, cacheDir: cacheDir, refresh: refresh, tpdbToken: strings.TrimSpace(os.Getenv("TPDB_API_TOKEN"))}
+	return &ProviderService{upstream: upstream, cacheDir: cacheDir, refresh: refresh}
 }
 
 func (service *ProviderService) Scrape(ctx context.Context, name string) *ActorProfile {
@@ -39,12 +38,6 @@ func (service *ProviderService) Scrape(ctx context.Context, name string) *ActorP
 	}{
 		{"Gfriends", func() (*ActorProfile, error) { return service.scrapeGfriends(ctx, name) }},
 		{"Minnano-AV", func() (*ActorProfile, error) { return scrapeMinnano(ctx, service.upstream, name) }},
-		{"ThePornDB", func() (*ActorProfile, error) {
-			if service.tpdbToken == "" {
-				return nil, nil
-			}
-			return scrapeThePornDB(ctx, service.upstream, service.tpdbToken, name)
-		}},
 		{"Wikipedia", func() (*ActorProfile, error) { return scrapeWikipedia(ctx, service.upstream, name) }},
 		{"Wikidata", func() (*ActorProfile, error) { return scrapeWikidata(ctx, service.upstream, name) }},
 	}
@@ -200,53 +193,6 @@ func containsExact(values []string, expected string) bool {
 		}
 	}
 	return false
-}
-
-type tpdbPerformer struct {
-	Name      string   `json:"name"`
-	Slug      string   `json:"slug"`
-	Bio       string   `json:"bio"`
-	Aliases   []string `json:"aliases"`
-	Image     string   `json:"image"`
-	Thumbnail string   `json:"thumbnail"`
-	Face      string   `json:"face"`
-}
-
-func scrapeThePornDB(ctx context.Context, upstream *Upstream, token, name string) (*ActorProfile, error) {
-	query := url.Values{"q": {name}, "per_page": {"10"}}
-	address := "https://api.theporndb.net/performers?" + query.Encode()
-	body, err := upstream.Get(ctx, address, map[string]string{
-		"Accept": "application/json", "Authorization": "Bearer " + token,
-	}, defaultBodyLimit)
-	if err != nil {
-		return nil, err
-	}
-	var response struct {
-		Data []tpdbPerformer `json:"data"`
-	}
-	if err := json.Unmarshal(body, &response); err != nil {
-		return nil, err
-	}
-	matches := make([]tpdbPerformer, 0, 1)
-	for _, candidate := range response.Data {
-		if normalizeName(candidate.Name) == normalizeName(name) || containsExact(candidate.Aliases, name) {
-			matches = append(matches, candidate)
-		}
-	}
-	if len(matches) != 1 {
-		return nil, nil
-	}
-	candidate := matches[0]
-	imageURL := firstNonempty(candidate.Face, candidate.Image, candidate.Thumbnail)
-	if imageURL == "" && strings.TrimSpace(candidate.Bio) == "" {
-		return nil, nil
-	}
-	sourceURL := address
-	if candidate.Slug != "" {
-		sourceURL = "https://theporndb.net/performers/" + url.PathEscape(candidate.Slug)
-	}
-	return &ActorProfile{Name: name, Aliases: unique(candidate.Aliases), ImageURL: imageURL,
-		Biography: strings.TrimSpace(candidate.Bio), SourceURLs: []string{sourceURL}, SourceNames: []string{"ThePornDB"}}, nil
 }
 
 func (service *ProviderService) loadGfriendsTree(ctx context.Context) (map[string]any, error) {
