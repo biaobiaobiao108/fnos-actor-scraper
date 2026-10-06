@@ -25,9 +25,10 @@ type options struct {
 	apply, overwrite, refresh, probe, watch bool
 }
 type task struct {
-	name   string
-	count  int
-	person *FnPerson
+	name          string
+	count         int
+	person        *FnPerson
+	lookupAliases []string
 }
 
 func main() {
@@ -233,7 +234,11 @@ func collectTasks(o options) ([]task, error) {
 			skippedNumeric++
 			continue
 		}
-		result = append(result, task{name: name, count: 1, person: &person})
+		aliases := []string{}
+		if originalName := strings.TrimSpace(person.OriginalName); originalName != "" && normalizeName(originalName) != normalizeName(name) {
+			aliases = append(aliases, originalName)
+		}
+		result = append(result, task{name: name, count: 1, person: &person, lookupAliases: aliases})
 	}
 	if skippedNumeric > 0 {
 		fmt.Printf("跳过 %d 条纯数字名称记录（看起来是演员编号，无法按名称查询资料）\n", skippedNumeric)
@@ -297,7 +302,7 @@ func processActor(ctx context.Context, client *FnOSClient, providers *ProviderSe
 		printExistingFieldSkip(detail, hasBio, hasImage, o.overwrite)
 		return nil
 	}
-	profile, scrapeErr := cachedScrape(ctx, providers, name, o.cache, o.refresh)
+	profile, scrapeErr := cachedScrape(ctx, providers, name, item.lookupAliases, o.cache, o.refresh)
 	if profile == nil || len(portraitCandidates(profile)) == 0 && profile.Biography == "" {
 		wanted := make([]string, 0, 2)
 		if canTryImage {
@@ -454,20 +459,27 @@ func imageBlockReason(detail FnPerson, profile *ActorProfile, exists, overwrite 
 	return ""
 }
 
-func cachedScrape(ctx context.Context, providers *ProviderService, name, cache string, refresh bool) (*ActorProfile, error) {
+func cachedScrape(ctx context.Context, providers *ProviderService, name string, lookupAliases []string, cache string, refresh bool) (*ActorProfile, error) {
 	sum := sha256.Sum256([]byte(name))
 	file := filepath.Join(cache, "actors", hex.EncodeToString(sum[:])+".json")
+	var cachedProfile *ActorProfile
 	if !refresh {
 		if info, err := os.Stat(file); err == nil && info.Size() <= 1<<20 && time.Since(info.ModTime()) < 30*24*time.Hour {
 			if data, err := os.ReadFile(file); err == nil {
 				var p ActorProfile
 				if json.Unmarshal(data, &p) == nil && strings.TrimSpace(p.Name) != "" && (len(p.ImageCandidates) > 0 || strings.TrimSpace(p.ImageURL) == "") {
-					return &p, nil
+					cachedProfile = &p
+					if !hasAlternateActorLookup(name, lookupAliases...) || hasPortraitAndBiography(&p) {
+						return &p, nil
+					}
 				}
 			}
 		}
 	}
-	profile, err := providers.Scrape(ctx, name)
+	profile, err := providers.ScrapeWithAliases(ctx, name, lookupAliases...)
+	if cachedProfile != nil {
+		profile = mergeActorProfiles(name, cachedProfile, profile)
+	}
 	if profile == nil || isRetryableUpstreamError(err) {
 		return profile, err
 	}

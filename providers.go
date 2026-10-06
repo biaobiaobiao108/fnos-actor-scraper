@@ -53,6 +53,42 @@ func NewProviderService(upstream *Upstream, cacheDir string, refresh bool) *Prov
 }
 
 func (service *ProviderService) Scrape(ctx context.Context, name string) (*ActorProfile, error) {
+	return service.ScrapeWithAliases(ctx, name)
+}
+
+func (service *ProviderService) ScrapeWithAliases(ctx context.Context, name string, additionalNames ...string) (*ActorProfile, error) {
+	lookupNames := actorLookupNames(name, additionalNames...)
+	profiles := make([]*ActorProfile, 0, len(lookupNames))
+	var failures []error
+	for index, lookupName := range lookupNames {
+		if index > 0 {
+			fmt.Printf("%s 未找到完整资料，尝试备用名称：%s\n", name, lookupName)
+		}
+		profile, err := service.scrapeOneName(ctx, lookupName)
+		if profile != nil {
+			profile.Name = name
+			profiles = append(profiles, profile)
+		}
+		if err != nil {
+			failures = append(failures, fmt.Errorf("名称 %s：%w", lookupName, err))
+		}
+		merged := mergeActorProfiles(name, profiles...)
+		if hasPortraitAndBiography(merged) {
+			break
+		}
+	}
+	merged := mergeActorProfiles(name, profiles...)
+	if len(failures) > 0 {
+		return merged, &providerScrapeError{errors: failures}
+	}
+	return merged, nil
+}
+
+func hasPortraitAndBiography(profile *ActorProfile) bool {
+	return profile != nil && len(portraitCandidates(profile)) > 0 && strings.TrimSpace(profile.Biography) != ""
+}
+
+func (service *ProviderService) scrapeOneName(ctx context.Context, name string) (*ActorProfile, error) {
 	profiles := make([]ActorProfile, 0, 5)
 	var failures []error
 	providers := []struct {
@@ -83,9 +119,28 @@ func (service *ProviderService) Scrape(ctx context.Context, name string) (*Actor
 		}
 		return nil, nil
 	}
+	merged := mergeActorProfiles(name, profilePointers(profiles)...)
+	if len(failures) > 0 {
+		return merged, &providerScrapeError{errors: failures}
+	}
+	return merged, nil
+}
+
+func profilePointers(profiles []ActorProfile) []*ActorProfile {
+	result := make([]*ActorProfile, 0, len(profiles))
+	for index := range profiles {
+		result = append(result, &profiles[index])
+	}
+	return result
+}
+
+func mergeActorProfiles(name string, profiles ...*ActorProfile) *ActorProfile {
 	merged := &ActorProfile{Name: name}
 	seenImages := make(map[string]bool)
 	for _, profile := range profiles {
+		if profile == nil {
+			continue
+		}
 		merged.Aliases = append(merged.Aliases, profile.Aliases...)
 		merged.SourceURLs = append(merged.SourceURLs, profile.SourceURLs...)
 		merged.SourceNames = append(merged.SourceNames, profile.SourceNames...)
@@ -119,10 +174,10 @@ func (service *ProviderService) Scrape(ctx context.Context, name string) (*Actor
 		}
 	}
 	merged.Aliases, merged.SourceURLs, merged.SourceNames = unique(merged.Aliases), unique(merged.SourceURLs), unique(merged.SourceNames)
-	if len(failures) > 0 {
-		return merged, &providerScrapeError{errors: failures}
+	if len(merged.ImageCandidates) == 0 && strings.TrimSpace(merged.Biography) == "" {
+		return nil
 	}
-	return merged, nil
+	return merged
 }
 
 func scrapeWikidata(ctx context.Context, upstream *Upstream, name string) (*ActorProfile, error) {
