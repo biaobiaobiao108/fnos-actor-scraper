@@ -1,6 +1,7 @@
 package main
 
 type ActorProfile struct {
+	LookupRevision  string              `json:"lookupRevision,omitempty"`
 	Name            string              `json:"name"`
 	Aliases         []string            `json:"aliases"`
 	ImageURL        string              `json:"imageUrl,omitempty"`

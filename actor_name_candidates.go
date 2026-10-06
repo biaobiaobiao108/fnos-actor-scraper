@@ -1,13 +1,93 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
 	"github.com/yanmingcao/opencc-go"
 	"github.com/yanmingcao/opencc-go/pkg/embeddata"
 )
+
+const actorMatchingVersion = "2"
+
+var confirmedActorAliases = map[string][]string{
+	"碓冰莲": {"碓氷れん"}, "七泽美亚": {"七沢みあ"}, "三咲美忧": {"三咲美憂"},
+	"三宫椿": {"三宮つばき"}, "东云みれい": {"東雲みれい"}, "二叶惠麻": {"二葉エマ"},
+	"仓本堇": {"倉本すみれ"}, "优木あおい": {"優木あおい"}, "佐仓宁宁": {"佐倉ねね"},
+	"佐山爱": {"佐山愛"}, "佳苗琉华": {"佳苗るか"}, "凉森玲梦": {"涼森れむ"},
+	"儿玉玲奈": {"児玉れな"}, "君岛美绪": {"君島みお"}, "大槻响": {"大槻ひびき"},
+	"枫可怜": {"楓カレン"}, "相泽南": {"相沢みなみ"}, "浜崎真绪": {"浜崎真緒"},
+	"桥本有菜": {"橋本ありな"}, "梦乃爱华": {"夢乃あいか"}, "水卜樱": {"水卜さくら"},
+	"高桥圣子": {"高橋しょう子"}, "杏树纱奈": {"杏樹紗奈"}, "永井玛丽亚": {"永井マリア"},
+	"园田美樱": {"園田みおん"},
+}
+
+// 用户映射是明确确认的姓名对应；不从相似度推断人物。
+func (service *ProviderService) loadNameAliases() error {
+	file, err := os.Open(filepath.Join(service.cacheDir, "actor-aliases.json"))
+	if os.IsNotExist(err) {
+		service.nameAliases = nil
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("读取演员别名配置失败：%w", err)
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, (1<<20)+1))
+	if err != nil {
+		return err
+	}
+	if len(data) > 1<<20 {
+		return fmt.Errorf("演员别名配置超过 1 MiB")
+	}
+	var configured map[string][]string
+	if err := json.Unmarshal(data, &configured); err != nil {
+		return fmt.Errorf("演员别名配置格式错误：%w", err)
+	}
+	if configured == nil {
+		return fmt.Errorf("演员别名配置必须是姓名到名称数组的 JSON 对象")
+	}
+	aliases := make(map[string][]string, len(configured))
+	for name, values := range configured {
+		key := normalizeName(name)
+		if key == "" || len(values) == 0 || len(values) > 8 {
+			return fmt.Errorf("演员别名配置每个姓名必须有 1 到 8 个别名")
+		}
+		if _, exists := aliases[key]; exists {
+			return fmt.Errorf("演员别名配置包含重复的规范化姓名：%s", name)
+		}
+		for _, value := range values {
+			if normalizeName(value) == "" {
+				return fmt.Errorf("演员别名配置包含空别名：%s", name)
+			}
+		}
+		aliases[key] = values
+	}
+	service.nameAliases = aliases
+	return nil
+}
+
+func (service *ProviderService) lookupNames(name string, additional ...string) []string {
+	additional = append([]string(nil), additional...)
+	seeds := append([]string{name}, additional...)
+	for _, seed := range seeds {
+		additional = append(additional, service.nameAliases[normalizeName(seed)]...)
+	}
+	return actorLookupNames(name, additional...)
+}
+
+func (service *ProviderService) lookupRevision(name string, additional ...string) string {
+	data, _ := json.Marshal(service.lookupNames(name, additional...))
+	sum := sha256.Sum256(append([]byte(actorMatchingVersion+":"+gfriendsIndexVersion+":"), data...))
+	return hex.EncodeToString(sum[:])
+}
 
 var (
 	nameConvertersOnce sync.Once
@@ -18,6 +98,13 @@ var (
 
 func actorLookupNames(name string, additionalNames ...string) []string {
 	seeds := append([]string{name}, additionalNames...)
+	for _, seed := range append([]string(nil), seeds...) {
+		for key, aliases := range confirmedActorAliases {
+			if normalizeName(key) == normalizeName(seed) {
+				seeds = append(seeds, aliases...)
+			}
+		}
+	}
 	candidates := make([]string, 0, len(seeds)*3)
 	seen := make(map[string]bool, len(seeds)*3)
 	add := func(candidate string) {
@@ -38,7 +125,7 @@ func actorLookupNames(name string, additionalNames ...string) []string {
 
 	ensureNameConverters()
 	if nameConverterErr != nil {
-		fmt.Printf("日文汉字转换器不可用，仅使用演员原名和飞牛原名：%v\n", nameConverterErr)
+		fmt.Printf("日文汉字转换器不可用，仅使用原名和已确认别名：%v\n", nameConverterErr)
 		return candidates
 	}
 	for _, seed := range seeds {
@@ -73,8 +160,4 @@ func ensureNameConverters() {
 			nameConverterErr = fmt.Errorf("加载繁体转日文汉字配置：%w", err)
 		}
 	})
-}
-
-func hasAlternateActorLookup(name string, additionalNames ...string) bool {
-	return len(actorLookupNames(name, additionalNames...)) > 1
 }

@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/PuerkitoBio/goquery"
 )
@@ -16,12 +17,17 @@ const gfriendsTreeURL = "https://cdn.jsdelivr.net/gh/gfriends/gfriends@master/Fi
 const defaultJavDBBaseURL = "https://javdb570.com"
 
 type ProviderService struct {
-	upstream   *Upstream
-	cacheDir   string
-	refresh    bool
-	indexMu    sync.Mutex
-	indexReady bool
-	indexDB    *sql.DB
+	upstream        *Upstream
+	cacheDir        string
+	refresh         bool
+	indexMu         sync.Mutex
+	indexReady      bool
+	indexDB         *sql.DB
+	nameAliases     map[string][]string
+	indexChecked    time.Time
+	indexSourceMod  time.Time
+	indexSourceSize int64
+	indexRefreshErr error
 }
 
 type providerScrapeError struct{ errors []error }
@@ -58,6 +64,8 @@ func (service *ProviderService) Close() error {
 	err := service.indexDB.Close()
 	service.indexDB = nil
 	service.indexReady = false
+	service.indexChecked = time.Time{}
+	service.indexRefreshErr = nil
 	return err
 }
 
@@ -66,7 +74,7 @@ func (service *ProviderService) Scrape(ctx context.Context, name string) (*Actor
 }
 
 func (service *ProviderService) ScrapeWithAliases(ctx context.Context, name string, additionalNames ...string) (*ActorProfile, error) {
-	lookupNames := actorLookupNames(name, additionalNames...)
+	lookupNames := service.lookupNames(name, additionalNames...)
 	profiles := make([]*ActorProfile, 0, len(lookupNames))
 	var failures []error
 	for index, lookupName := range lookupNames {
@@ -353,16 +361,26 @@ func (service *ProviderService) scrapeGfriends(ctx context.Context, name string)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.QueryContext(ctx, "SELECT DISTINCT image_path FROM gfriends_aliases WHERE name_norm = ? LIMIT 2", gfriendsNormalizeName(strings.TrimSuffix(name, ".jpg")))
+	normalized := gfriendsNormalizeName(gfriendsImageName(name))
+	// One statement gives a consistent snapshot even while another actor refreshes
+	// the index. Count all identities before limiting portrait fallback paths.
+	rows, err := db.QueryContext(ctx, `SELECT image_path,
+		(SELECT COUNT(DISTINCT portrait_identity) FROM gfriends_aliases WHERE name_norm = ?)
+		FROM gfriends_aliases WHERE name_norm = ? ORDER BY image_path LIMIT ?`, normalized, normalized, maxGfriendsPortraitCandidates)
 	if err != nil {
 		return nil, fmt.Errorf("查询 Gfriends 名称索引失败：%w", err)
 	}
 	defer rows.Close()
-	paths := make([]string, 0, 2)
+	paths := make([]string, 0, maxGfriendsPortraitCandidates)
 	for rows.Next() {
 		var path string
-		if err := rows.Scan(&path); err != nil {
+		var identities int
+		if err := rows.Scan(&path, &identities); err != nil {
 			return nil, fmt.Errorf("读取 Gfriends 名称索引失败：%w", err)
+		}
+		if identities != 1 {
+			fmt.Printf("%s 在 Gfriends 中匹配到不同头像姓名，跳过该来源以避免误配\n", name)
+			return nil, nil
 		}
 		paths = append(paths, path)
 	}
@@ -372,12 +390,14 @@ func (service *ProviderService) scrapeGfriends(ctx context.Context, name string)
 	if len(paths) == 0 {
 		return nil, nil
 	}
-	if len(paths) > 1 {
-		fmt.Printf("%s 在 Gfriends 中匹配到多个不同头像，跳过该来源以避免误配\n", name)
-		return nil, nil
-	}
 	imageURL := gfriendsRawURL(paths[0])
-	return &ActorProfile{Name: name, Aliases: []string{}, ImageURL: imageURL, SourceURLs: []string{gfriendsTreeURL, imageURL}, SourceNames: []string{"Gfriends"}}, nil
+	profile := &ActorProfile{Name: name, Aliases: []string{}, ImageURL: imageURL, SourceURLs: []string{gfriendsTreeURL}, SourceNames: []string{"Gfriends"}}
+	for _, path := range paths {
+		address := gfriendsRawURL(path)
+		profile.ImageCandidates = append(profile.ImageCandidates, PortraitCandidate{URL: address, Source: "Gfriends"})
+		profile.SourceURLs = append(profile.SourceURLs, address)
+	}
+	return profile, nil
 }
 
 func gfriendsRawURL(path string) string {

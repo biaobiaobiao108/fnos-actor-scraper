@@ -18,7 +18,7 @@ func runWatch(o options) error {
 		return err
 	}
 	defer store.Close()
-	fmt.Printf("监控状态数据库：%s。数据库中尚无记录的演员会从全库扫描；失败任务按退避间隔重试。\n", statePath)
+	fmt.Printf("监控状态数据库：%s。新演员和检索规则变化的记录会重新评估；仍缺资料的已完成记录每 7 天复查，失败任务按退避间隔重试。\n", statePath)
 
 	base := strings.TrimSpace(os.Getenv("FNOS_URL"))
 	if base == "" {
@@ -53,6 +53,9 @@ func runWatch(o options) error {
 }
 
 func processNewActors(ctx context.Context, client *FnOSClient, providers *ProviderService, upstream *Upstream, o options, store *watchStore) error {
+	if err := providers.loadNameAliases(); err != nil {
+		return err
+	}
 	current, err := collectTasks(o)
 	if err != nil {
 		return err
@@ -64,7 +67,9 @@ func processNewActors(ctx context.Context, client *FnOSClient, providers *Provid
 		if key == "" {
 			continue
 		}
-		due, err := store.ShouldProcess(ctx, key, now)
+		revision := providers.lookupRevision(item.name, item.lookupAliases...)
+		missing := item.person != nil && (strings.TrimSpace(item.person.Biography) == "" || strings.TrimSpace(item.person.ProfilePath) == "")
+		due, err := store.ShouldProcess(ctx, key, now, revision, missing)
 		if err != nil {
 			return err
 		}
@@ -77,6 +82,7 @@ func processNewActors(ctx context.Context, client *FnOSClient, providers *Provid
 	}
 	fmt.Printf("发现 %d 个待处理或到达重试时间的演员，开始自动处理。\n", len(dueTasks))
 	for _, item := range dueTasks {
+		revision := providers.lookupRevision(item.name, item.lookupAliases...)
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -84,14 +90,14 @@ func processNewActors(ctx context.Context, client *FnOSClient, providers *Provid
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			retryAfter, stateErr := store.MarkFailure(ctx, taskIdentity(item), item.name, err, time.Now())
+			retryAfter, stateErr := store.MarkFailure(ctx, taskIdentity(item), item.name, err, time.Now(), revision)
 			if stateErr != nil {
 				return stateErr
 			}
 			fmt.Fprintf(os.Stderr, "%s 处理失败，将在 %s 后重试：%v\n", item.name, retryAfter.Round(time.Second), err)
 			continue
 		}
-		if err := store.MarkDone(ctx, taskIdentity(item), item.name, time.Now()); err != nil {
+		if err := store.MarkDone(ctx, taskIdentity(item), item.name, time.Now(), revision); err != nil {
 			return err
 		}
 	}

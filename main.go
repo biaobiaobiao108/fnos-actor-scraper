@@ -171,6 +171,9 @@ func run() error {
 	upstream := NewUpstream()
 	providers := NewProviderService(upstream, o.cache, o.refresh)
 	defer providers.Close()
+	if err := providers.loadNameAliases(); err != nil {
+		return err
+	}
 	jobs := make(chan task)
 	results := make(chan error)
 	workers := min(o.concurrency, len(tasks))
@@ -461,6 +464,7 @@ func imageBlockReason(detail FnPerson, profile *ActorProfile, exists, overwrite 
 }
 
 func cachedScrape(ctx context.Context, providers *ProviderService, name string, lookupAliases []string, cache string, refresh bool) (*ActorProfile, error) {
+	revision := providers.lookupRevision(name, lookupAliases...)
 	sum := sha256.Sum256([]byte(name))
 	file := filepath.Join(cache, "actors", hex.EncodeToString(sum[:])+".json")
 	var cachedProfile *ActorProfile
@@ -468,9 +472,9 @@ func cachedScrape(ctx context.Context, providers *ProviderService, name string, 
 		if info, err := os.Stat(file); err == nil && info.Size() <= 1<<20 && time.Since(info.ModTime()) < 30*24*time.Hour {
 			if data, err := os.ReadFile(file); err == nil {
 				var p ActorProfile
-				if json.Unmarshal(data, &p) == nil && strings.TrimSpace(p.Name) != "" && (len(p.ImageCandidates) > 0 || strings.TrimSpace(p.ImageURL) == "") {
+				if json.Unmarshal(data, &p) == nil && p.LookupRevision == revision && normalizeName(p.Name) == normalizeName(name) && (len(p.ImageCandidates) > 0 || strings.TrimSpace(p.ImageURL) == "") {
 					cachedProfile = &p
-					if !hasAlternateActorLookup(name, lookupAliases...) || hasPortraitAndBiography(&p) {
+					if hasPortraitAndBiography(&p) || time.Since(info.ModTime()) < 7*24*time.Hour {
 						return &p, nil
 					}
 				}
@@ -484,6 +488,7 @@ func cachedScrape(ctx context.Context, providers *ProviderService, name string, 
 	if profile == nil || isRetryableUpstreamError(err) {
 		return profile, err
 	}
+	profile.LookupRevision = revision
 	if err := os.MkdirAll(filepath.Dir(file), 0o750); err != nil {
 		return profile, fmt.Errorf("创建演员缓存目录失败：%w", err)
 	}
@@ -502,6 +507,9 @@ func probe(ctx context.Context, name string, o options) error {
 	upstream := NewUpstream()
 	providers := NewProviderService(upstream, o.cache, o.refresh)
 	defer providers.Close()
+	if err := providers.loadNameAliases(); err != nil {
+		return err
+	}
 	profile, scrapeErr := providers.Scrape(ctx, name)
 	if profile == nil {
 		if isRetryableUpstreamError(scrapeErr) {
