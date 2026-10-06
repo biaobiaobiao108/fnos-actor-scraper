@@ -33,7 +33,7 @@ type task struct {
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "错误：%v\n", err)
+		fmt.Fprintf(os.Stderr, "❌ 错误：%v\n", err)
 		os.Exit(1)
 	}
 }
@@ -153,8 +153,9 @@ func run() error {
 	if o.probe {
 		return probe(ctx, tasks[0].name, o)
 	}
-	fmt.Printf("收集到 %d 个待处理演员，本次处理 %d 个。模式：%s\n", len(tasks), len(tasks), map[bool]string{true: "写入飞牛", false: "预览"}[o.apply])
+	fmt.Printf("🎬 收集到 %d 个待处理演员，本次处理 %d 个。模式：%s\n", len(tasks), len(tasks), map[bool]string{true: "写入飞牛", false: "预览"}[o.apply])
 	if len(tasks) == 0 {
+		fmt.Println("🐾 这轮没有演员需要处理，先歇一会儿～")
 		return nil
 	}
 	base := strings.TrimSpace(os.Getenv("FNOS_URL"))
@@ -218,7 +219,7 @@ func collectTasks(o options) ([]task, error) {
 			result = append(result, task{name: actor.name, count: actor.count})
 		}
 		if skippedNumeric > 0 && !o.watch {
-			fmt.Printf("跳过 %d 个纯数字演员名称（无法按姓名查询上游资料）\n", skippedNumeric)
+			fmt.Printf("⏭️ 跳过 %d 个纯数字演员名称（无法按姓名查询上游资料）\n", skippedNumeric)
 		}
 		return result, nil
 	}
@@ -245,7 +246,7 @@ func collectTasks(o options) ([]task, error) {
 		result = append(result, task{name: name, count: 1, person: &person, lookupAliases: aliases})
 	}
 	if skippedNumeric > 0 && !o.watch {
-		fmt.Printf("跳过 %d 条纯数字名称记录（看起来是演员编号，无法按名称查询资料）\n", skippedNumeric)
+		fmt.Printf("⏭️ 跳过 %d 条纯数字名称记录（看起来是演员编号，无法按名称查询资料）\n", skippedNumeric)
 	}
 	return result, nil
 }
@@ -265,7 +266,7 @@ func isNumericActorName(name string) bool {
 
 func processActor(ctx context.Context, client *FnOSClient, providers *ProviderService, upstream *Upstream, item task, o options) error {
 	name := item.name
-	fmt.Printf("\n[%s]\n", name)
+	fmt.Printf("\n🎭 [%s]\n", name)
 	var matches []FnPerson
 	if item.person != nil {
 		matches = []FnPerson{*item.person}
@@ -281,11 +282,11 @@ func processActor(ctx context.Context, client *FnOSClient, providers *ProviderSe
 		}
 	}
 	if len(matches) == 0 {
-		fmt.Println("  跳过：飞牛中没有同名演员档案（本程序不会新建档案）")
+		fmt.Println("  ⏭️ 跳过：飞牛中没有同名演员档案（本程序不会新建档案）")
 		return nil
 	}
 	if len(matches) > 1 {
-		fmt.Printf("  跳过：找到 %d 个同名档案，无法安全判断目标\n", len(matches))
+		fmt.Printf("  ⏭️ 跳过：找到 %d 个同名档案，无法安全判断目标\n", len(matches))
 		return nil
 	}
 	detail, err := client.GetEditDetail(ctx, matches[0].GUID)
@@ -293,7 +294,7 @@ func processActor(ctx context.Context, client *FnOSClient, providers *ProviderSe
 		return fmt.Errorf("%s 读取飞牛档案失败：%w", name, err)
 	}
 	if !isLocalPerson(detail) {
-		fmt.Println("  跳过：该档案不是可安全修改的本地演员资料（官方/在线资料受保护）")
+		fmt.Println("  ⏭️ 跳过：该档案不是可安全修改的本地演员资料（官方/在线资料受保护）")
 		return nil
 	}
 	hasBio := strings.TrimSpace(detail.Biography) != ""
@@ -315,7 +316,7 @@ func processActor(ctx context.Context, client *FnOSClient, providers *ProviderSe
 		if canTryBio {
 			wanted = append(wanted, "简介")
 		}
-		fmt.Printf("  来源未找到可用%s；已有字段保持不变\n", strings.Join(wanted, "和"))
+		fmt.Printf("  🔎 来源未找到可用%s；已有字段保持不变\n", strings.Join(wanted, "和"))
 		if isRetryableUpstreamError(scrapeErr) {
 			return scrapeErr
 		}
@@ -351,9 +352,9 @@ func processActor(ctx context.Context, client *FnOSClient, providers *ProviderSe
 		}
 		if len(image) == 0 {
 			canImage = false
-			fmt.Println("  所有头像来源均处理失败，跳过头像")
+			fmt.Println("  ⏭️ 所有头像来源均处理失败，跳过头像")
 			if !canBio {
-				fmt.Printf("  简介无法更新：%s；跳过此演员\n", biographyBlockReason(detail, profile, hasBio, o.overwrite))
+				fmt.Printf("  ⏭️ 简介无法更新：%s；跳过此演员\n", biographyBlockReason(detail, profile, hasBio, o.overwrite))
 				if retryErr != nil {
 					return retryErr
 				}
@@ -368,7 +369,7 @@ func processActor(ctx context.Context, client *FnOSClient, providers *ProviderSe
 	if canBio {
 		usedSources = append(usedSources, firstNonempty(profile.BiographySource, "简介来源"))
 	}
-	fmt.Printf("  来源：%s\n  将更新：%s\n", strings.Join(unique(usedSources), ", "), strings.Join(nonempty([]string{map[bool]string{true: "头像"}[canImage], map[bool]string{true: "简介"}[canBio]}), "、"))
+	fmt.Printf("  📚 来源：%s\n  🛠️ 将更新：%s\n", strings.Join(unique(usedSources), ", "), strings.Join(nonempty([]string{map[bool]string{true: "头像"}[canImage], map[bool]string{true: "简介"}[canBio]}), "、"))
 	if o.apply {
 		var profilePath *string
 		if len(image) > 0 {
@@ -385,7 +386,7 @@ func processActor(ctx context.Context, client *FnOSClient, providers *ProviderSe
 		if err := client.SaveProfile(ctx, detail, name, biography, profilePath); err != nil {
 			return err
 		}
-		fmt.Println("  已写入飞牛演员档案")
+		fmt.Println("  ✨ 已写入飞牛演员档案")
 	}
 	return retryErr
 }
@@ -405,7 +406,7 @@ func portraitCandidates(profile *ActorProfile) []PortraitCandidate {
 
 func printNoWritableFields(detail FnPerson, profile *ActorProfile, hasBio, hasImage, overwrite bool) {
 	if hasBio && hasImage && !overwrite {
-		fmt.Println("  跳过：头像和简介都已存在；默认只补缺失字段")
+		fmt.Println("  ⏭️ 跳过：头像和简介都已存在；默认只补缺失字段")
 		return
 	}
 	blocked := make([]string, 0, 2)
@@ -416,10 +417,10 @@ func printNoWritableFields(detail FnPerson, profile *ActorProfile, hasBio, hasIm
 		blocked = append(blocked, "头像"+reason)
 	}
 	if len(blocked) == 0 {
-		fmt.Println("  跳过：没有可补充的缺失字段")
+		fmt.Println("  ⏭️ 跳过：没有可补充的缺失字段")
 		return
 	}
-	fmt.Printf("  跳过：没有可写入的缺失字段（%s）\n", strings.Join(blocked, "；"))
+	fmt.Printf("  ⏭️ 跳过：没有可写入的缺失字段（%s）\n", strings.Join(blocked, "；"))
 }
 
 func printExistingFieldSkip(detail FnPerson, hasBio, hasImage, overwrite bool) {
@@ -434,7 +435,7 @@ func printExistingFieldSkip(detail FnPerson, hasBio, hasImage, overwrite bool) {
 	} else if hasImage && !overwrite {
 		blocked = append(blocked, "头像已有内容")
 	}
-	fmt.Printf("  跳过：没有缺失且未锁定的可写字段（%s）\n", strings.Join(blocked, "；"))
+	fmt.Printf("  ⏭️ 跳过：没有缺失且未锁定的可写字段（%s）\n", strings.Join(blocked, "；"))
 }
 
 func biographyBlockReason(detail FnPerson, profile *ActorProfile, exists, overwrite bool) string {

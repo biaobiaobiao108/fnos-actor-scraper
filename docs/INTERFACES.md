@@ -36,7 +36,7 @@ fnactor [--actor NAME | --root DIR | --watch] [--db FILE] [--cache DIR] [--limit
 | `--watch-interval DURATION` | `1m` | 监控轮询间隔，范围 `10s` 到 `24h` |
 | `--help` | — | 显示帮助信息 |
 
-Docker 镜像无参数启动时只显示用法并保持空闲，不会自动批量扫描。在容器终端运行 `fnactor --limit 20` 才开始预览；显式添加 `--apply` 才会写入飞牛。数据库批量模式会跳过纯数字名称记录，因为在线来源按演员姓名检索；watch 模式静默忽略纯数字名称，空轮次会输出“本轮检查完成，没有需要处理的新增或待重试演员。”头像按 Gfriends、JavDB、Wikipedia、Wikidata 的优先级逐个尝试，当前图片处理失败会回退；JavDB 仅在演员名/别名精确匹配且头像不是占位图时提供头像。简介优先级为 Wikipedia、Wikidata。Minnano-AV 因持续返回 HTTP 403 已移除。
+Docker 镜像无参数启动时只显示用法并保持空闲，不会自动批量扫描。在容器终端运行 `fnactor --limit 20` 才开始预览；显式添加 `--apply` 才会写入飞牛。数据库批量模式会跳过纯数字名称记录，因为在线来源按演员姓名检索；watch 模式静默忽略纯数字名称，空轮次会输出“🐾 本轮检查完成，没有需要处理的新增或待重试演员。”常见流程日志使用少量表情标记处理、成功、跳过和错误状态。头像按 Gfriends、JavDB、Wikipedia、Wikidata 的优先级逐个尝试，当前图片处理失败会回退；JavDB 仅在演员名/别名精确匹配且头像不是占位图时提供头像。简介优先级为 Wikipedia、Wikidata。Minnano-AV 因持续返回 HTTP 403 已移除。
 
 日文姓名候选依次包含飞牛显示名称、`person.original_name`、用户配置的已确认别名、简体转繁体、繁体转日文新字体。转换只生成汉字字形候选，不推测假名读音；使用 `--probe` 时终端显示正在尝试的候选名。候选名称只用于上游查询，不参与飞牛档案匹配。
 
@@ -69,7 +69,7 @@ docker compose run --rm fnactor --actor '三上悠亚' --overwrite --apply
 
 监控中标记完成但仍缺头像或简介的记录，每 7 天重新评估；已完整演员不做定期重新刮削。旧状态缺少 `lookupRevision` 时自动重新评估一次，规则升级或该演员候选改变时也会重新评估。重新评估仍先通过 API 检查身份与字段锁定，只补可写的缺失字段。
 
-监控是显式启用的持续模式。首次启动立即扫描当前本地演员库；已有头像和简介按字段分别跳过，只补缺失且未锁定字段。之后按轮询间隔发现新 GUID 并自动处理。启动 Compose 监控服务即明确授权 `--apply` 写入缺失资料。已处理 GUID 和重试状态保存在 `/config/fnactor-state.db`，演员资料缓存继续使用 JSON 文件。旧版 `/config/watch-state.json` 不导入，首次启用 SQLite 状态库会从全库扫描；停止监控后删除 SQLite 数据库及其 WAL/SHM 文件也会重新扫描全库，但现有字段仍会跳过。失败按逐渐延长的间隔重试，最长间隔 24 小时。日志由 Docker 收集，可在飞牛 Docker 的该容器“运行日志”中查看。Compose 为日志配置 `json-file` 驱动，最多保留 3 个、每个 10 MiB。暂停和恢复示例：
+监控是显式启用的持续模式。首次启动立即扫描当前本地演员库；已有头像和简介按字段分别跳过，只补缺失且未锁定字段。之后按轮询间隔发现新 GUID 并自动处理。启动 Compose 监控服务即明确授权 `--apply` 写入缺失资料。已处理 GUID 和重试状态保存在 `/config/fnactor-state.db`，演员资料缓存继续使用 JSON 文件。旧版 `/config/watch-state.json` 不导入，首次启用 SQLite 状态库会从全库扫描；停止监控后删除 SQLite 数据库及其 WAL/SHM 文件也会重新扫描全库，但现有字段仍会跳过。失败按逐渐延长的间隔重试，最长间隔 24 小时。主要状态日志带有少量表情标记，错误和重试信息仍输出到标准错误。日志由 Docker 收集，可在飞牛 Docker 的该容器“运行日志”中查看。Compose 为日志配置 `json-file` 驱动，最多保留 3 个、每个 10 MiB。暂停和恢复示例：
 
 ```sh
 docker compose --profile watch up -d fnactor-watch
