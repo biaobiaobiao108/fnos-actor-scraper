@@ -36,7 +36,7 @@ fnactor [--actor NAME | --root DIR | --watch] [--db FILE] [--cache DIR] [--limit
 | `--watch-interval DURATION` | `1m` | 监控轮询间隔，范围 `10s` 到 `24h` |
 | `--help` | — | 显示帮助信息 |
 
-Docker 镜像无参数启动时只显示用法并保持空闲，不会自动批量扫描。在容器终端运行 `fnactor --limit 20` 才开始预览；显式添加 `--apply` 才会写入飞牛。数据库批量模式会跳过纯数字名称记录，因为在线来源按演员姓名检索。头像按 Gfriends、JavDB、Wikipedia、Wikidata 的优先级逐个尝试，当前图片处理失败会回退；JavDB 仅在演员名/别名精确匹配且头像不是占位图时提供头像。简介优先级为 Wikipedia、Wikidata。Minnano-AV 因持续返回 HTTP 403 已移除。
+Docker 镜像无参数启动时只显示用法并保持空闲，不会自动批量扫描。在容器终端运行 `fnactor --limit 20` 才开始预览；显式添加 `--apply` 才会写入飞牛。数据库批量模式会跳过纯数字名称记录，因为在线来源按演员姓名检索；watch 模式静默忽略纯数字名称，空轮次会输出“本轮检查完成，没有需要处理的新增或待重试演员。”头像按 Gfriends、JavDB、Wikipedia、Wikidata 的优先级逐个尝试，当前图片处理失败会回退；JavDB 仅在演员名/别名精确匹配且头像不是占位图时提供头像。简介优先级为 Wikipedia、Wikidata。Minnano-AV 因持续返回 HTTP 403 已移除。
 
 日文姓名候选依次包含飞牛显示名称、`person.original_name`、用户配置的已确认别名、简体转繁体、繁体转日文新字体。转换只生成汉字字形候选，不推测假名读音；使用 `--probe` 时终端显示正在尝试的候选名。候选名称只用于上游查询，不参与飞牛档案匹配。
 

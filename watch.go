@@ -78,6 +78,7 @@ func processNewActors(ctx context.Context, client *FnOSClient, providers *Provid
 		}
 	}
 	if len(dueTasks) == 0 {
+		fmt.Println("本轮检查完成，没有需要处理的新增或待重试演员。")
 		return nil
 	}
 	fmt.Printf("发现 %d 个待处理或到达重试时间的演员，开始自动处理。\n", len(dueTasks))

@@ -217,7 +217,7 @@ func collectTasks(o options) ([]task, error) {
 			}
 			result = append(result, task{name: actor.name, count: actor.count})
 		}
-		if skippedNumeric > 0 {
+		if skippedNumeric > 0 && !o.watch {
 			fmt.Printf("跳过 %d 个纯数字演员名称（无法按姓名查询上游资料）\n", skippedNumeric)
 		}
 		return result, nil
@@ -244,7 +244,7 @@ func collectTasks(o options) ([]task, error) {
 		}
 		result = append(result, task{name: name, count: 1, person: &person, lookupAliases: aliases})
 	}
-	if skippedNumeric > 0 {
+	if skippedNumeric > 0 && !o.watch {
 		fmt.Printf("跳过 %d 条纯数字名称记录（看起来是演员编号，无法按名称查询资料）\n", skippedNumeric)
 	}
 	return result, nil
