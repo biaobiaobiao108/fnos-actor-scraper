@@ -44,7 +44,7 @@ func expireGfriendsCheck(service *ProviderService) {
 	service.indexMu.Unlock()
 }
 
-func TestGfriendsPortraitGroupingAndAmbiguity(t *testing.T) {
+func TestGfriendsPortraitCandidatesWithDifferentNames(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		folders map[string]map[string]string
@@ -57,10 +57,10 @@ func TestGfriendsPortraitGroupingAndAmbiguity(t *testing.T) {
 		}, 3},
 		{"别名指向不同姓名", map[string]map[string]string{
 			"a": {"佐山愛.jpg": "佐山愛.jpg"}, "b": {"佐山愛.jpg": "別人.jpg"},
-		}, 0},
-		{"不跨不同假名姓名归组", map[string]map[string]string{
+		}, 2},
+		{"不同假名姓名也保留候选", map[string]map[string]string{
 			"a": {"佐山愛.jpg": "あい.jpg"}, "b": {"佐山愛.jpg": "アイ.jpg"},
-		}, 0},
+		}, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			directory := t.TempDir()
@@ -70,12 +70,6 @@ func TestGfriendsPortraitGroupingAndAmbiguity(t *testing.T) {
 			profile, err := service.scrapeGfriends(context.Background(), "佐山愛")
 			if err != nil {
 				t.Fatal(err)
-			}
-			if tc.count == 0 {
-				if profile != nil {
-					t.Fatal("歧义姓名返回了头像")
-				}
-				return
 			}
 			if profile == nil || len(profile.ImageCandidates) != tc.count {
 				t.Fatalf("候选数错误：%+v", profile)
@@ -87,7 +81,7 @@ func TestGfriendsPortraitGroupingAndAmbiguity(t *testing.T) {
 	}
 }
 
-func TestGfriendsCandidateLimitDoesNotHideAmbiguity(t *testing.T) {
+func TestGfriendsCandidateLimitWithDifferentNames(t *testing.T) {
 	folders := make(map[string]map[string]string)
 	for i := 0; i < 20; i++ {
 		folders[fmt.Sprintf("%02d", i)] = map[string]string{"佐山愛.jpg": "佐山愛.jpg"}
@@ -115,8 +109,12 @@ func TestGfriendsCandidateLimitDoesNotHideAmbiguity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if profile != nil {
-		t.Fatal("候选上限以外的歧义被遗漏")
+	if profile == nil || len(profile.ImageCandidates) != maxGfriendsPortraitCandidates {
+		t.Fatal("不同头像姓名导致可用候选被跳过")
+	}
+	missing, err := service.scrapeGfriends(context.Background(), "未匹配演员")
+	if err != nil || missing != nil {
+		t.Fatalf("未精确命中的姓名返回了资料：%+v %v", missing, err)
 	}
 }
 

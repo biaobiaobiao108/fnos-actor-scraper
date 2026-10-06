@@ -15,7 +15,7 @@ import (
 	"github.com/yanmingcao/opencc-go/pkg/embeddata"
 )
 
-const actorMatchingVersion = "2"
+const actorMatchingVersion = "3"
 
 // 用户映射是明确确认的姓名对应；不从相似度推断人物。
 func (service *ProviderService) loadNameAliases() error {

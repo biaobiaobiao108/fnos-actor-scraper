@@ -378,9 +378,8 @@ func (service *ProviderService) scrapeGfriends(ctx context.Context, name string)
 		if err := rows.Scan(&path, &identities); err != nil {
 			return nil, fmt.Errorf("读取 Gfriends 名称索引失败：%w", err)
 		}
-		if identities != 1 {
-			fmt.Printf("%s 在 Gfriends 中匹配到不同头像姓名，跳过该来源以避免误配\n", name)
-			return nil, nil
+		if identities > 1 && len(paths) == 0 {
+			fmt.Printf("%s 在 Gfriends 中匹配到不同头像姓名，按路径顺序尝试可用头像\n", name)
 		}
 		paths = append(paths, path)
 	}
