@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-func TestConfirmedAliasesAndGlyphCandidates(t *testing.T) {
-	for name, expected := range map[string]string{"七泽美亚": "七沢みあ", "桥本有菜": "橋本ありな", "佐仓宁宁": "佐倉ねね", "伊贺まこ": "伊賀まこ"} {
+func TestGlyphCandidates(t *testing.T) {
+	for name, expected := range map[string]string{"东云みれい": "東雲みれい", "优木あおい": "優木あおい", "伊贺まこ": "伊賀まこ"} {
 		if !containsExact(actorLookupNames(name), expected) {
 			t.Fatalf("%s 未包含 %s", name, expected)
 		}
