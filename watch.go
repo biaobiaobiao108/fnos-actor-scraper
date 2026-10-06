@@ -78,7 +78,7 @@ func processNewActors(ctx context.Context, client *FnOSClient, providers *Provid
 		}
 	}
 	if len(dueTasks) == 0 {
-		fmt.Println("\n=^._.^= [IDLE] 本轮检查完成，没有需要处理的新增或待重试演员。\n")
+		fmt.Printf("\n=^._.^= [IDLE] 本轮检查完成，没有需要处理的新增或待重试演员。\n\n")
 		return nil
 	}
 	fmt.Printf("\n[SCAN] 发现 %d 个待处理或到达重试时间的演员，开始自动处理。\n", len(dueTasks))

@@ -155,7 +155,7 @@ func run() error {
 	}
 	fmt.Printf("\n[SCAN] 收集到 %d 个待处理演员，本次处理 %d 个。模式：%s\n", len(tasks), len(tasks), map[bool]string{true: "写入飞牛", false: "预览"}[o.apply])
 	if len(tasks) == 0 {
-		fmt.Println("\n=^._.^= [IDLE] 这轮没有演员需要处理，先歇一会儿～\n")
+		fmt.Printf("\n=^._.^= [IDLE] 这轮没有演员需要处理，先歇一会儿～\n\n")
 		return nil
 	}
 	base := strings.TrimSpace(os.Getenv("FNOS_URL"))
