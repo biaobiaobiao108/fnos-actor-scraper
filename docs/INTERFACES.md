@@ -38,7 +38,7 @@ fnactor [--actor NAME | --root DIR | --watch] [--db FILE] [--cache DIR] [--limit
 
 Docker 镜像无参数启动时只显示用法并保持空闲，不会自动批量扫描。在容器终端运行 `fnactor --limit 20` 才开始预览；显式添加 `--apply` 才会写入飞牛。数据库批量模式会跳过纯数字名称记录，因为在线来源按演员姓名检索。头像按 Gfriends、JavDB、Wikipedia、Wikidata 的优先级逐个尝试，当前图片处理失败会回退；JavDB 仅在演员名/别名精确匹配且头像不是占位图时提供头像。简介优先级为 Wikipedia、Wikidata。Minnano-AV 因持续返回 HTTP 403 已移除。
 
-日文艺名支持自动备用检索：程序先查飞牛演员显示名称；头像或简介仍缺少时，再尝试已验证的日文艺名映射。批量模式还会把 `person.original_name` 作为备用搜索名。命中结果会补充到按原显示名称精确匹配的演员档案；别名只参与上游查询，不参与飞牛档案匹配。使用 `--probe` 时，终端会显示尝试的备用名称。当前映射包括“七泽美亚→七沢みあ”“二叶惠麻→二葉エマ”“枫可怜→楓カレン”等经过实测的名称；程序不会自动猜测简繁字或读音。
+日文姓名候选依次包含飞牛显示名称、`person.original_name`、简体转繁体、繁体转日文新字体。转换只生成汉字字形候选，不推测假名读音；使用 `--probe` 时终端显示正在尝试的候选名。Gfriends `Filetree.json` 会缓存为 `/config/gfriends-filetree.json`，并建立可重建的 `/config/gfriends-index.db` SQLite 精确名称索引。索引规范化 Unicode 兼容字符、大小写、标点空格和平/片假名；只接受唯一头像路径的精确匹配，名称歧义时跳过该来源。其他来源按相同候选顺序查询。候选名称只用于上游查询，不参与飞牛档案匹配。
 
 示例：
 

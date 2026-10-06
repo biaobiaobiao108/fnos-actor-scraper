@@ -170,6 +170,7 @@ func run() error {
 	}
 	upstream := NewUpstream()
 	providers := NewProviderService(upstream, o.cache, o.refresh)
+	defer providers.Close()
 	jobs := make(chan task)
 	results := make(chan error)
 	workers := min(o.concurrency, len(tasks))
@@ -500,6 +501,7 @@ func probe(ctx context.Context, name string, o options) error {
 	started := time.Now()
 	upstream := NewUpstream()
 	providers := NewProviderService(upstream, o.cache, o.refresh)
+	defer providers.Close()
 	profile, scrapeErr := providers.Scrape(ctx, name)
 	if profile == nil {
 		if isRetryableUpstreamError(scrapeErr) {

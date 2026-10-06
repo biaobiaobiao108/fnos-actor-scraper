@@ -2,15 +2,12 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/PuerkitoBio/goquery"
 )
@@ -22,9 +19,9 @@ type ProviderService struct {
 	upstream   *Upstream
 	cacheDir   string
 	refresh    bool
-	treeMu     sync.Mutex
-	treeLoaded bool
-	tree       map[string]any
+	indexMu    sync.Mutex
+	indexReady bool
+	indexDB    *sql.DB
 }
 
 type providerScrapeError struct{ errors []error }
@@ -50,6 +47,18 @@ func (err *providerScrapeError) Retryable() bool {
 
 func NewProviderService(upstream *Upstream, cacheDir string, refresh bool) *ProviderService {
 	return &ProviderService{upstream: upstream, cacheDir: cacheDir, refresh: refresh}
+}
+
+func (service *ProviderService) Close() error {
+	service.indexMu.Lock()
+	defer service.indexMu.Unlock()
+	if service.indexDB == nil {
+		return nil
+	}
+	err := service.indexDB.Close()
+	service.indexDB = nil
+	service.indexReady = false
+	return err
 }
 
 func (service *ProviderService) Scrape(ctx context.Context, name string) (*ActorProfile, error) {
@@ -339,77 +348,34 @@ func containsExact(values []string, expected string) bool {
 	return false
 }
 
-func (service *ProviderService) loadGfriendsTree(ctx context.Context) (map[string]any, error) {
-	service.treeMu.Lock()
-	defer service.treeMu.Unlock()
-	if service.treeLoaded {
-		return service.tree, nil
-	}
-	cachePath := filepath.Join(service.cacheDir, "gfriends-filetree.json")
-	if !service.refresh {
-		if info, err := os.Stat(cachePath); err == nil && time.Since(info.ModTime()) < 24*time.Hour && info.Size() <= defaultBodyLimit {
-			if data, err := os.ReadFile(cachePath); err == nil {
-				var tree map[string]any
-				if json.Unmarshal(data, &tree) == nil && tree != nil {
-					service.tree, service.treeLoaded = tree, true
-					return service.tree, nil
-				}
-			}
-		}
-	}
-	data, err := service.upstream.Get(ctx, gfriendsTreeURL, map[string]string{"Accept": "application/json"}, defaultBodyLimit)
-	if err != nil {
-		return nil, err
-	}
-	var tree map[string]any
-	if err := json.Unmarshal(data, &tree); err != nil {
-		return nil, err
-	}
-	if tree == nil {
-		return nil, fmt.Errorf("Gfriends 文件树为空")
-	}
-	if err := os.MkdirAll(service.cacheDir, 0o750); err != nil {
-		return nil, err
-	}
-	if err := writeFileAtomic(cachePath, data, 0o640); err != nil {
-		return nil, err
-	}
-	service.tree, service.treeLoaded = tree, true
-	return service.tree, nil
-}
-
 func (service *ProviderService) scrapeGfriends(ctx context.Context, name string) (*ActorProfile, error) {
-	tree, err := service.loadGfriendsTree(ctx)
+	db, err := service.loadGfriendsIndex(ctx)
 	if err != nil {
 		return nil, err
 	}
-	wanted := normalizeName(strings.TrimSuffix(name, filepath.Ext(name)))
-	paths := make([]string, 0, 1)
-	var walk func(any, []string)
-	walk = func(node any, parents []string) {
-		object, ok := node.(map[string]any)
-		if !ok {
-			return
-		}
-		for key, value := range object {
-			if key == "Information" {
-				continue
-			}
-			if child, ok := value.(string); ok {
-				alias := normalizeName(strings.TrimSuffix(strings.TrimSuffix(key, ".jpg"), ".png"))
-				if alias == wanted {
-					paths = append(paths, strings.Join(append(append([]string{}, parents...), child), "/"))
-				}
-				continue
-			}
-			walk(value, append(append([]string{}, parents...), key))
-		}
+	rows, err := db.QueryContext(ctx, "SELECT DISTINCT image_path FROM gfriends_aliases WHERE name_norm = ? LIMIT 2", gfriendsNormalizeName(strings.TrimSuffix(name, ".jpg")))
+	if err != nil {
+		return nil, fmt.Errorf("查询 Gfriends 名称索引失败：%w", err)
 	}
-	walk(tree["Content"], []string{"Content"})
+	defer rows.Close()
+	paths := make([]string, 0, 2)
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return nil, fmt.Errorf("读取 Gfriends 名称索引失败：%w", err)
+		}
+		paths = append(paths, path)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("读取 Gfriends 名称索引失败：%w", err)
+	}
 	if len(paths) == 0 {
 		return nil, nil
 	}
-	sort.Strings(paths)
+	if len(paths) > 1 {
+		fmt.Printf("%s 在 Gfriends 中匹配到多个不同头像，跳过该来源以避免误配\n", name)
+		return nil, nil
+	}
 	imageURL := gfriendsRawURL(paths[0])
 	return &ActorProfile{Name: name, Aliases: []string{}, ImageURL: imageURL, SourceURLs: []string{gfriendsTreeURL, imageURL}, SourceNames: []string{"Gfriends"}}, nil
 }

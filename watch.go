@@ -35,6 +35,7 @@ func runWatch(o options) error {
 	}
 	upstream := NewUpstream()
 	providers := NewProviderService(upstream, o.cache, o.refresh)
+	defer providers.Close()
 	ticker := time.NewTicker(o.watchInterval)
 	defer ticker.Stop()
 	fmt.Printf("演员监控已启动，首轮检查全库，之后每 %s 检查新增演员；日志输出到 Docker 标准日志。\n", o.watchInterval)
