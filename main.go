@@ -145,6 +145,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	totalTasks := len(tasks)
 	if o.limit > 0 && len(tasks) > o.limit {
 		tasks = tasks[:o.limit]
 	}
@@ -153,7 +154,7 @@ func run() error {
 	if o.probe {
 		return probe(ctx, tasks[0].name, o)
 	}
-	fmt.Printf("\n[SCAN] 收集到 %d 个待处理演员，本次处理 %d 个。模式：%s\n", len(tasks), len(tasks), map[bool]string{true: "写入飞牛", false: "预览"}[o.apply])
+	fmt.Printf("\n[SCAN] 收集到 %d 个待处理演员，本次处理 %d 个。模式：%s\n", totalTasks, len(tasks), map[bool]string{true: "写入飞牛", false: "预览"}[o.apply])
 	if len(tasks) == 0 {
 		fmt.Printf("\n=^._.^= [IDLE] 这轮没有演员需要处理，先歇一会儿～\n\n")
 		return nil
@@ -176,11 +177,15 @@ func run() error {
 		return err
 	}
 	jobs := make(chan task)
-	results := make(chan error)
+	results := make(chan error, len(tasks))
 	workers := min(o.concurrency, len(tasks))
 	for range workers {
 		go func() {
 			for item := range jobs {
+				if err := ctx.Err(); err != nil {
+					results <- err
+					continue
+				}
 				results <- processActor(ctx, client, providers, upstream, item, o)
 			}
 		}()
@@ -387,6 +392,11 @@ func processActor(ctx context.Context, client *FnOSClient, providers *ProviderSe
 			return err
 		}
 		fmt.Println("  [OK] 已写入飞牛演员档案")
+	}
+	gotNeededImage := !canTryImage || len(image) > 0
+	gotNeededBio := !canTryBio || canBio
+	if gotNeededImage && gotNeededBio {
+		retryErr = nil
 	}
 	return retryErr
 }

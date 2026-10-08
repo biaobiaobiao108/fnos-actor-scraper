@@ -72,7 +72,7 @@ func (client *FnOSClient) request(ctx context.Context, path string, method strin
 	}
 	client.authMu.Lock()
 	defer client.authMu.Unlock()
-	if client.token == token {
+	if client.tokenValue() == token {
 		if err := client.loginLocked(ctx); err != nil {
 			return fmt.Errorf("FnOS 会话过期后重新登录失败：%w", err)
 		}
@@ -185,7 +185,7 @@ func fnosSignature(request *http.Request, body []byte, contentType string) strin
 
 	nonceNumber, err := cryptorand.Int(cryptorand.Reader, big.NewInt(900000))
 	if err != nil {
-		nonceNumber = big.NewInt(time.Now().UnixNano() % 900000)
+		nonceNumber = big.NewInt((time.Now().UnixNano() & 0x7FFFFFFFFFFFFFFF) % 900000)
 	}
 	nonce := strconv.FormatInt(nonceNumber.Int64()+100000, 10)
 	timestamp := strconv.FormatInt(time.Now().UnixMilli(), 10)
@@ -205,7 +205,7 @@ func md5Hex(data []byte) string {
 func (client *FnOSClient) Login(ctx context.Context) error {
 	client.authMu.Lock()
 	defer client.authMu.Unlock()
-	if client.token != "" {
+	if client.tokenValue() != "" {
 		return nil
 	}
 	return client.loginLocked(ctx)

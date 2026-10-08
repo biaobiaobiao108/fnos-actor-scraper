@@ -106,38 +106,62 @@ func hasPortraitAndBiography(profile *ActorProfile) bool {
 }
 
 func (service *ProviderService) scrapeOneName(ctx context.Context, name string) (*ActorProfile, error) {
-	profiles := make([]ActorProfile, 0, 5)
+	profiles := make([]ActorProfile, 0, 4)
 	var failures []error
-	providers := []struct {
-		name string
-		run  func() (*ActorProfile, error)
-	}{
-		// 收集所有头像候选，供图片处理失败时按优先级回退。
-		// 头像顺序：Gfriends → JavDB → Wikipedia → Wikidata。
-		// 简介优先级：Wikipedia → Wikidata；合并时保留第一个非空值。
-		{"Gfriends", func() (*ActorProfile, error) { return service.scrapeGfriends(ctx, name) }},
-		{"JavDB", func() (*ActorProfile, error) { return scrapeJavDB(ctx, service.upstream, name) }},
-		{"Wikipedia", func() (*ActorProfile, error) { return scrapeWikipedia(ctx, service.upstream, name) }},
-		{"Wikidata", func() (*ActorProfile, error) { return scrapeWikidata(ctx, service.upstream, name) }},
-	}
-	for _, provider := range providers {
-		profile, err := provider.run()
+
+	recordProvider := func(providerName string, run func() (*ActorProfile, error)) *ActorProfile {
+		p, err := run()
 		if err != nil {
-			fmt.Printf("%s 的来源 %s 查询失败：%v\n", name, provider.name, err)
-			failures = append(failures, fmt.Errorf("%s：%w", provider.name, err))
+			fmt.Printf("%s 的来源 %s 查询失败：%v\n", name, providerName, err)
+			failures = append(failures, fmt.Errorf("%s：%w", providerName, err))
 		}
-		if profile != nil {
-			profiles = append(profiles, *profile)
+		if p != nil {
+			profiles = append(profiles, *p)
 		}
+		return p
 	}
+
+	// 1. Gfriends（本地 SQLite 索引，零公网 HTTP 开销）：头像第一来源
+	recordProvider("Gfriends", func() (*ActorProfile, error) {
+		return service.scrapeGfriends(ctx, name)
+	})
+
+	merged := mergeActorProfiles(name, profilePointers(profiles)...)
+
+	// 2. JavDB（公网 HTTP）：仅提供头像，不提供简介。
+	// 若 Gfriends 已经命中了头像候选，则无需请求 JavDB，避免不必要的公网延迟与限流。
+	hasImage := merged != nil && len(merged.ImageCandidates) > 0
+	if !hasImage {
+		recordProvider("JavDB", func() (*ActorProfile, error) {
+			return scrapeJavDB(ctx, service.upstream, name)
+		})
+		merged = mergeActorProfiles(name, profilePointers(profiles)...)
+	}
+
+	// 3. Wikipedia（公网 HTTP）：简介第一来源，亦可补充百科缩略图
+	recordProvider("Wikipedia", func() (*ActorProfile, error) {
+		return scrapeWikipedia(ctx, service.upstream, name)
+	})
+	merged = mergeActorProfiles(name, profilePointers(profiles)...)
+
+	// 4. Wikidata（公网 HTTP）：若头像与简介均已就绪，跳过 Wikidata，显著降低网络耗时与限流等待。
+	// 仅在仍缺少头像候选或仍缺少简介时作为兜底来源查询。
+	if !hasPortraitAndBiography(merged) {
+		recordProvider("Wikidata", func() (*ActorProfile, error) {
+			return scrapeWikidata(ctx, service.upstream, name)
+		})
+		merged = mergeActorProfiles(name, profilePointers(profiles)...)
+	}
+
 	if len(profiles) == 0 {
 		if len(failures) > 0 {
 			return nil, &providerScrapeError{errors: failures}
 		}
 		return nil, nil
 	}
-	merged := mergeActorProfiles(name, profilePointers(profiles)...)
-	if len(failures) > 0 {
+
+	// 若资料已完整（同时包含头像和简介），忽略已被更优来源覆盖的次要来源偶发错误
+	if len(failures) > 0 && !hasPortraitAndBiography(merged) {
 		return merged, &providerScrapeError{errors: failures}
 	}
 	return merged, nil
@@ -316,12 +340,6 @@ func scrapeWikidata(ctx context.Context, upstream *Upstream, name string) (*Acto
 	profile := &ActorProfile{Name: name, Aliases: unique(aliases), ImageURL: imageURL, Biography: biography,
 		BiographySource: biographySource,
 		SourceURLs:      sourceURLs, SourceNames: []string{"Wikidata"}}
-	if len(searchFailures) > 0 {
-		if imageErr != nil {
-			searchFailures = append(searchFailures, imageErr)
-		}
-		return profile, &providerScrapeError{errors: searchFailures}
-	}
 	return profile, imageErr
 }
 

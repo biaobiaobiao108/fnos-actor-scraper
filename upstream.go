@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 const defaultBodyLimit int64 = 16 << 20
@@ -156,7 +157,11 @@ func errorPreview(body []byte) string {
 	}
 	text := strings.Join(strings.Fields(string(body)), " ")
 	if len(text) > 256 {
-		text = text[:256] + "…"
+		text = text[:256]
+		for !utf8.ValidString(text) {
+			text = text[:len(text)-1]
+		}
+		text += "…"
 	}
 	return ": " + text
 }

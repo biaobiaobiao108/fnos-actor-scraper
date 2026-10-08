@@ -51,7 +51,7 @@ func loadLocalPeople(path string) ([]FnPerson, error) {
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("FnOS person 表缺少字段：%s；数据库结构可能已随 FnOS 更新", strings.Join(missing, ", "))
 	}
-	query := `SELECT guid, COALESCE(trim_id,''), COALESCE(tmdb_id,0), COALESCE(imdb_id,''), COALESCE(name,''), COALESCE(original_name,''), COALESCE(biography,''), COALESCE(profile_path,'') FROM person WHERE substr(trim_id,1,13)='LOCAL_PERSON_' ORDER BY name COLLATE NOCASE`
+	query := `SELECT guid, COALESCE(trim_id,''), COALESCE(tmdb_id,0), COALESCE(imdb_id,''), COALESCE(name,''), COALESCE(original_name,''), COALESCE(biography,''), COALESCE(profile_path,'') FROM person WHERE UPPER(substr(trim_id,1,13))='LOCAL_PERSON_' ORDER BY name COLLATE NOCASE`
 	peopleRows, err := db.Query(query)
 	if err != nil {
 		return nil, err
