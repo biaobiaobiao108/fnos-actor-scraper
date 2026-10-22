@@ -109,7 +109,7 @@ func hasPortraitAndBiography(profile *ActorProfile) bool {
 }
 
 func (service *ProviderService) scrapeOneName(ctx context.Context, name string) (*ActorProfile, error) {
-	profiles := make([]ActorProfile, 0, 4)
+	profiles := make([]ActorProfile, 0, 3)
 	var failures []error
 	pauseEncountered := false
 
@@ -149,17 +149,7 @@ func (service *ProviderService) scrapeOneName(ctx context.Context, name string) 
 		}
 	}
 
-	// 3. Wikipedia（公网 HTTP）：简介第一来源，亦可补充百科缩略图
-	recordProvider("Wikipedia", func() (*ActorProfile, error) {
-		return scrapeWikipedia(ctx, service.upstream, name)
-	})
-	merged = mergeActorProfiles(name, profilePointers(profiles)...)
-	if pauseEncountered {
-		return merged, &providerScrapeError{errors: failures}
-	}
-
-	// 4. Wikidata（公网 HTTP）：若头像与简介均已就绪，跳过 Wikidata，显著降低网络耗时与限流等待。
-	// 仅在仍缺少头像候选或仍缺少简介时作为兜底来源查询。
+	// 3. Wikidata（公网 HTTP）：仅在仍缺少头像候选或简介时查询。
 	if !hasPortraitAndBiography(merged) {
 		recordProvider("Wikidata", func() (*ActorProfile, error) {
 			return scrapeWikidata(ctx, service.upstream, name)
@@ -537,63 +527,4 @@ func javDBBase() (string, error) {
 		return "", fmt.Errorf("JAVDB_BASE_URL 必须是公网 HTTPS 基础地址")
 	}
 	return value, nil
-}
-
-func scrapeWikipedia(ctx context.Context, upstream *Upstream, name string) (*ActorProfile, error) {
-	var failures []error
-	for _, language := range []string{"zh", "ja"} {
-		query := url.Values{"action": {"query"}, "generator": {"search"}, "gsrsearch": {name}, "gsrnamespace": {"0"}, "gsrlimit": {"5"}, "prop": {"extracts|pageimages"}, "exintro": {"1"}, "explaintext": {"1"}, "piprop": {"thumbnail"}, "pithumbsize": {"640"}, "format": {"json"}, "formatversion": {"2"}, "utf8": {"1"}}
-		var response struct {
-			Query struct {
-				Pages []struct {
-					Title     string `json:"title"`
-					Extract   string `json:"extract"`
-					Thumbnail struct {
-						Source string `json:"source"`
-					} `json:"thumbnail"`
-				} `json:"pages"`
-			} `json:"query"`
-		}
-		target := "https://" + language + ".wikipedia.org/w/api.php?" + query.Encode()
-		if err := fetchJSON(ctx, upstream, target, &response); err != nil {
-			failures = append(failures, fmt.Errorf("Wikipedia (%s)：%w", language, err))
-			continue
-		}
-		bestIndex := -1
-		ambiguous := false
-		for index, page := range response.Query.Pages {
-			if normalizeName(name) == normalizeName(page.Title) {
-				if bestIndex >= 0 {
-					ambiguous = true
-					break
-				}
-				bestIndex = index
-			}
-		}
-		if bestIndex < 0 || ambiguous {
-			continue
-		}
-		page := response.Query.Pages[bestIndex]
-		if strings.TrimSpace(page.Extract) == "" && page.Thumbnail.Source == "" {
-			continue
-		}
-		aliases := []string{}
-		if page.Title != name {
-			aliases = append(aliases, page.Title)
-		}
-		biography := strings.TrimSpace(page.Extract)
-		biographySource := ""
-		if biography != "" {
-			biographySource = "Wikipedia (" + language + ")"
-		}
-		profile := &ActorProfile{Name: name, Aliases: aliases, ImageURL: page.Thumbnail.Source, Biography: biography, BiographySource: biographySource, SourceURLs: []string{"https://" + language + ".wikipedia.org/wiki/" + url.PathEscape(page.Title)}, SourceNames: []string{"Wikipedia (" + language + ")"}}
-		if len(failures) > 0 {
-			return profile, &providerScrapeError{errors: failures}
-		}
-		return profile, nil
-	}
-	if len(failures) > 0 {
-		return nil, &providerScrapeError{errors: failures}
-	}
-	return nil, nil
 }

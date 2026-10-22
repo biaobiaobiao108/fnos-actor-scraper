@@ -14,7 +14,7 @@
 - 支持 `--actor` 指定单人，也支持通过 `--root` 只读扫描 NFO 并按其中演员名筛选。
 - 日文名称支持确认别名和字形候选检索：先查飞牛显示名称和 `original_name`，再查确认别名，最后按简体转繁体、繁体转日文新字体生成候选；Gfriends 使用可重建的 SQLite 名称索引做精确匹配。
 - 支持显式后台监控新入库演员；监控首次启动就扫描全库，已有头像/简介按字段跳过，只补缺少项，之后持续处理新演员。
-- 头像按 Gfriends、JavDB、Wikipedia、Wikidata 顺序准备候选；程序按需查询次级来源（Gfriends 命中头像时跳过无简介的 JavDB，Wikipedia 满足简介且头像就绪时跳过 Wikidata），避免请求放大效应。下载、解码或尺寸校验失败会尝试下一候选；全部失败才跳过头像。有可用简介时仍保存简介，并继续处理下一位演员。
+- 头像按 Gfriends、JavDB、Wikidata 顺序准备候选；程序按需查询次级来源（Gfriends 命中头像时跳过 JavDB，仅在仍缺头像或简介时查询 Wikidata），避免请求放大效应。下载、解码或尺寸校验失败会尝试下一候选；全部失败才跳过头像。有可用简介时仍保存简介，并继续处理下一位演员。
 
 ### 日文艺名备用检索
 
@@ -222,7 +222,7 @@ docker compose run --rm fnactor --actor '三上悠亚' --overwrite --apply
 - 使用 `modernc.org/sqlite` 只读访问飞牛影视 `person` 表，并将监控状态保存在独立的 `/config/fnactor-state.db` 数据库中。
 - 使用 `golang.org/x/image/webp` 和标准库 JPEG 解码器处理头像，转换为 640×960 JPEG 后经飞牛 API 上传。
 - 头像按单张处理；下载/解码/尺寸失败会回退到下一来源，全部失败才跳过头像，并保留可写入的简介，不会终止整个批次。监控模式把处理状态、重试次数和下次重试时间保存在 `/config/fnactor-state.db`，首次扫描全库、之后按数据库轮询新记录。
-- 在线来源包括 Gfriends、JavDB、Wikipedia 和 Wikidata。头像按 Gfriends、JavDB 演员搜索卡片、Wikipedia、Wikidata 的优先级逐个尝试，当前候选处理失败会回退到下一来源；简介优先采用 Wikipedia，其次 Wikidata。JavDB 只按精确演员名/别名匹配，不采信占位头像；它不提供可靠简介。缓存存放在 `/config`。
+- 在线来源包括 Gfriends、JavDB 和 Wikidata。头像按 Gfriends、JavDB 演员搜索卡片、Wikidata 的优先级逐个尝试，当前候选处理失败会回退到下一来源；简介采用 Wikidata。JavDB 只按精确演员名/别名匹配，不采信占位头像；它不提供可靠简介。缓存存放在 `/config`。
 - 飞牛 API 是其 Web 前端使用的内部接口，飞牛版本升级时可能变化；请求会附带前端客户端标识和签名，版本变化时需对照 NAS 前端资源核验。
 
 详细架构、接口、部署配置与故障排查见[实现与架构](docs/ARCHITECTURE.md)和[接口与使用说明](docs/INTERFACES.md)。项目协作规范见 [AGENTS.md](AGENTS.md)。

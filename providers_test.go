@@ -23,7 +23,7 @@ func TestErrorPreviewValidUTF8(t *testing.T) {
 	}
 }
 
-func TestScrapeOneNameOnDemandSources(t *testing.T) {
+func TestScrapeOneNameUsesWikidataAsBiographySource(t *testing.T) {
 	dir := t.TempDir()
 	// 写入 Gfriends 本地文件树
 	writeGfriendsTestTree(t, dir, gfriendsTestTree(t, map[string]map[string]string{
@@ -31,7 +31,7 @@ func TestScrapeOneNameOnDemandSources(t *testing.T) {
 	}))
 
 	var javdbCalls int32
-	var wikiCalls int32
+	var wikipediaCalls int32
 	var wikidataCalls int32
 
 	mockTransport := gfriendsRoundTripper(func(r *http.Request) (*http.Response, error) {
@@ -41,12 +41,15 @@ func TestScrapeOneNameOnDemandSources(t *testing.T) {
 			atomic.AddInt32(&javdbCalls, 1)
 			return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`<html></html>`)), Request: r}, nil
 		case strings.Contains(urlStr, "wikipedia.org"):
-			atomic.AddInt32(&wikiCalls, 1)
-			body := `{"query":{"pages":[{"title":"有头像演员","extract":"这是来自维基百科的简介","thumbnail":{"source":"https://upload.wikimedia.org/test.jpg"}}]}}`
-			return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+			atomic.AddInt32(&wikipediaCalls, 1)
+			return &http.Response{StatusCode: 500, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`unexpected request`)), Request: r}, nil
 		case strings.Contains(urlStr, "wikidata.org"):
 			atomic.AddInt32(&wikidataCalls, 1)
-			return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"search":[]}`)), Request: r}, nil
+			body := `{"search":[{"id":"Q12345","label":"有头像演员","aliases":[]}]}`
+			if strings.Contains(urlStr, "Special:EntityData/Q12345.json") {
+				body = `{"entities":{"Q12345":{"descriptions":{"zh":{"value":"这是来自 Wikidata 的简介"}},"aliases":{},"claims":{}}}}`
+			}
+			return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
 		default:
 			return &http.Response{StatusCode: 404, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`not found`)), Request: r}, nil
 		}
@@ -56,7 +59,7 @@ func TestScrapeOneNameOnDemandSources(t *testing.T) {
 	service := NewProviderService(upstream, dir, false)
 	defer service.Close()
 
-	// 1. 测试：Gfriends 有头像 + Wikipedia 有简介 -> 应该跳过 JavDB 和 Wikidata
+	// Gfriends 提供头像后跳过 JavDB，Wikidata 补充缺失的简介。
 	profile, err := service.scrapeOneName(context.Background(), "有头像演员")
 	if err != nil {
 		t.Fatalf("scrapeOneName 失败：%v", err)
@@ -67,27 +70,27 @@ func TestScrapeOneNameOnDemandSources(t *testing.T) {
 	if atomic.LoadInt32(&javdbCalls) != 0 {
 		t.Fatalf("Gfriends 已有头像时应跳过 JavDB，但调用了 %d 次", javdbCalls)
 	}
-	if atomic.LoadInt32(&wikidataCalls) != 0 {
-		t.Fatalf("资料已完整时应跳过 Wikidata，但调用了 %d 次", wikidataCalls)
+	if atomic.LoadInt32(&wikidataCalls) == 0 {
+		t.Fatal("缺少简介时应查询 Wikidata，但没有调用")
 	}
-	if atomic.LoadInt32(&wikiCalls) == 0 {
-		t.Fatal("未调用 Wikipedia 获取简介")
+	if atomic.LoadInt32(&wikipediaCalls) != 0 {
+		t.Fatalf("不应请求 Wikipedia，但调用了 %d 次", wikipediaCalls)
 	}
 
-	// 2. 测试：无头像且维基百科无条目的演员 -> 应该按需尝试 JavDB 和 Wikidata
+	// 无头像时仍按需尝试 JavDB 和 Wikidata。
 	atomic.StoreInt32(&javdbCalls, 0)
-	atomic.StoreInt32(&wikiCalls, 0)
+	atomic.StoreInt32(&wikipediaCalls, 0)
 	atomic.StoreInt32(&wikidataCalls, 0)
 
 	_, _ = service.scrapeOneName(context.Background(), "无头像缺简介演员")
 	if atomic.LoadInt32(&javdbCalls) == 0 {
 		t.Fatal("Gfriends 无头像时应尝试 JavDB，但未调用")
 	}
-	if atomic.LoadInt32(&wikiCalls) == 0 {
-		t.Fatal("应尝试 Wikipedia 获取简介，但未调用")
-	}
 	if atomic.LoadInt32(&wikidataCalls) == 0 {
-		t.Fatal("仍缺少资料时应尝试 Wikidata 作为兜底，但未调用")
+		t.Fatal("仍缺少资料时应尝试 Wikidata，但未调用")
+	}
+	if atomic.LoadInt32(&wikipediaCalls) != 0 {
+		t.Fatalf("不应请求 Wikipedia，但调用了 %d 次", wikipediaCalls)
 	}
 }
 
