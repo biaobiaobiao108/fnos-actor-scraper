@@ -107,7 +107,7 @@ ghcr.io/biaobiaobiao108/fnos-actor-scraper:latest
 
    应能看到 `trimmedia.db`。将示例路径替换为 `.env` 中的 `FNOS_DB_DIR`。它应指向包含数据库文件及其 WAL/SHM 的整个目录，不要只挂载单个数据库文件。这个挂载不要设置 `read_only: true`：SQLite 在 `mode=ro` 查询数据库内容时，仍需在 WAL 模式下处理 `-shm` 锁文件。程序自身以只读模式连接数据库，只执行查询，不会更新演员表。`CACHE_HOST_DIR` 指向可写的持久化目录；按上述目录布局可填写 `../fnactor-cache`。
 
-5. 拉取镜像并先做预览。GitHub Actions 成功后会发布 `latest` 镜像；更新部署时也先拉取最新镜像：
+5. 拉取镜像并先做预览。向 `main` 推送代码只运行 CI；推送版本 tag（如 `v0.0.9`）才会构建并发布 `latest`、版本号和提交 SHA 镜像。更新部署时先拉取最新镜像：
 
    ```sh
    docker compose pull fnactor
@@ -238,4 +238,4 @@ go vet ./...
 go run . --help
 ```
 
-不要在提交内容中包含 `.env`、登录口令、token 或代理凭据。GitHub Actions 负责构建并发布多架构容器镜像。
+不要在提交内容中包含 `.env`、登录口令、token 或代理凭据。GitHub Actions 在 `main` 的 push 和 pull request 上运行 CI；推送版本 tag 时构建并发布多架构容器镜像。
