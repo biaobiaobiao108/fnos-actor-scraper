@@ -315,9 +315,6 @@ func processActor(ctx context.Context, client *FnOSClient, providers *ProviderSe
 	if err != nil {
 		return fmt.Errorf("%s 读取飞牛档案失败：%w", name, err)
 	}
-	if !exactNameMatch(detail, name) {
-		return fmt.Errorf("%s 飞牛编辑详情中的姓名与检索目标不匹配", name)
-	}
 	if !isLocalPerson(detail) {
 		fmt.Println("  [SKIP] 该档案不是可安全修改的本地演员资料（官方/在线资料受保护）")
 		return nil
