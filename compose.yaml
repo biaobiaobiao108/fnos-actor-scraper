@@ -30,10 +30,10 @@ x-fnactor-common: &fnactor-common
   volumes:
     # SQLite opens the DB in mode=ro; the directory must allow transient WAL/SHM lock handling.
     - type: bind
-      source: /usr/local/apps/@appdata/trim.media/database
+      source: ${FNOS_DB_DIR:?Set FNOS_DB_DIR in .env}
       target: /fnos-db
     - type: bind
-      source: /vol1/docker/fnactor-cache
+      source: ${CACHE_HOST_DIR:?Set CACHE_HOST_DIR in .env}
       target: /config
 
 services:

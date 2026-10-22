@@ -64,6 +64,16 @@ func scanNFO(root string) (map[string]struct {
 		name  string
 		count int
 	})
+	rootInfo, err := os.Stat(root)
+	if err != nil {
+		return actors, fmt.Errorf("无法读取 NFO 根路径 %q：%w", root, err)
+	}
+	if !rootInfo.IsDir() {
+		return actors, fmt.Errorf("NFO 根路径 %q 不是目录", root)
+	}
+	if _, err := os.ReadDir(root); err != nil {
+		return actors, fmt.Errorf("无法读取 NFO 根目录 %q：%w", root, err)
+	}
 	visited := make(map[string]struct{})
 	var walk func(string) error
 	walk = func(path string) error {

@@ -118,6 +118,21 @@ func (store *watchStore) ShouldProcess(ctx context.Context, guid string, now tim
 	return true, nil
 }
 
+func (store *watchStore) NextPendingDelay(ctx context.Context, now time.Time) (time.Duration, bool, error) {
+	var nextAttempt sql.NullInt64
+	err := store.db.QueryRowContext(ctx,
+		"SELECT MIN(next_attempt_at) FROM watch_actor_state WHERE status = 'pending' AND next_attempt_at > ?",
+		now.Unix(),
+	).Scan(&nextAttempt)
+	if err != nil {
+		return 0, false, fmt.Errorf("读取下次监控重试时间失败：%w", err)
+	}
+	if !nextAttempt.Valid {
+		return 0, false, nil
+	}
+	return time.Duration(nextAttempt.Int64-now.Unix()) * time.Second, true, nil
+}
+
 func (store *watchStore) MarkDone(ctx context.Context, guid, name string, now time.Time, revision string) error {
 	_, err := store.db.ExecContext(ctx, `
 INSERT INTO watch_actor_state (guid, actor_name, status, attempts, last_attempt_at, next_attempt_at, last_error, updated_at, matching_revision)

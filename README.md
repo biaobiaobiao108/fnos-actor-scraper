@@ -49,13 +49,13 @@ ghcr.io/biaobiaobiao108/fnos-actor-scraper:latest
 
 ### 飞牛 NAS 部署步骤
 
-本项目是按需运行的 CLI 工具。容器启动后只显示简短用法并保持空闲，不会自行扫描演员；你在容器终端输入 `fnactor ...` 后才会执行任务。也可以继续用 Docker Compose 启动一次性任务，处理完成后容器退出。下面以飞牛 NAS 上的 `/vol1/docker/fnactor-deploy` 作为部署目录；请先确认 NAS 已安装 Docker/Compose，并能访问 GHCR。
+本项目是按需运行的 CLI 工具。容器启动后只显示简短用法并保持空闲，不会自行扫描演员；你在容器终端输入 `fnactor ...` 后才会执行任务。也可以用 Docker Compose 启动一次性任务，处理完成后容器退出。先在 NAS 选择部署目录、FnOS 数据库目录和持久缓存目录，并确认已安装 Docker/Compose 且能访问 GHCR。
 
 1. SSH 登录飞牛 NAS，准备部署目录和持久化缓存目录：
 
    ```sh
-   mkdir -p /vol1/docker/fnactor-deploy /vol1/docker/fnactor-cache
-   cd /vol1/docker/fnactor-deploy
+   mkdir -p ./fnactor-deploy ./fnactor-cache
+   cd ./fnactor-deploy
    ```
 
 2. 获取项目文件。NAS 安装了 Git 时可直接克隆：
@@ -79,6 +79,8 @@ ghcr.io/biaobiaobiao108/fnos-actor-scraper:latest
    | 变量 | 必填 | 用途与配置建议 |
    | --- | --- | --- |
    | `FNOS_URL` | 是 | 飞牛影视 API 地址。使用 `network_mode: host` 时通常设为 `http://127.0.0.1:5666`，即 NAS 本机回环地址。 |
+   | `FNOS_DB_DIR` | 是 | 主机上包含 `trimmedia.db`、WAL 和 SHM 文件的飞牛数据库目录。 |
+   | `CACHE_HOST_DIR` | 是 | 主机上用于持久化缓存和监控状态的可写目录。 |
    | `FNOS_USERNAME` | 使用账号密码时必填 | 有权限编辑飞牛影视演员资料的飞牛账号。 |
    | `FNOS_PASSWORD` | 使用账号密码时必填 | 上述账号密码。只保存在 NAS 的 `.env` 中。 |
    | `FNOS_TOKEN` | 可选 | 当前有效的飞牛 API 会话 token。程序设置此项时优先用 token；若收到 HTTP 401，配置了用户名密码时会自动重新登录并重试一次。未设置时则用账号密码登录；只提供 token 时过期需手动更新。 |
@@ -87,23 +89,23 @@ ghcr.io/biaobiaobiao108/fnos-actor-scraper:latest
    | `GOMEMLIMIT` | 否 | Go 运行时内存目标，默认 `640MiB`；Compose 容器硬限制是 `768m`。 |
    | `GOGC` | 否 | Go 垃圾回收目标，默认 `75`。一般保持默认即可。 |
    | `http_proxy`、`https_proxy` | 视网络而定 | 公网资料来源使用的 HTTP/HTTPS 代理。没有代理时留空；需要认证时可填 `http://用户名:密码@代理主机:端口`，特殊字符需进行 URL 编码。 |
-   | `no_proxy` | 否 | 逗号分隔的不走代理地址。默认包含 `localhost,127.0.0.1,::1`；如果将飞牛 API 配为其他地址，请把该主机加入此列表。 |
+   | `no_proxy` | 否 | 公网上游请求的代理绕过列表。默认包含 `localhost,127.0.0.1,::1`；FnOS API 客户端始终直连，不依赖此设置。 |
 
-   `FNOS_DB_PATH` 和 `CACHE_DIR` 已由 Compose 分别设置为 `/fnos-db/trimmedia.db`、`/config`，通常不需要放进 `.env`。代理变量的大小写形式由 Compose 一并传入容器。
+   `FNOS_DB_PATH` 和 `CACHE_DIR` 已由 Compose 分别设置为 `/fnos-db/trimmedia.db`、`/config`，通常不需要放进 `.env`。主机目录由 `FNOS_DB_DIR` 和 `CACHE_HOST_DIR` 配置。代理变量的大小写形式由 Compose 一并传入容器。
 
-4. 核对 Compose 中的飞牛影视数据库路径。默认配置挂载数据库目录：
+4. 核对 `.env` 中配置的飞牛影视数据库路径。Compose 将该数据库目录挂载为：
 
    ```text
-   /usr/local/apps/@appdata/trim.media/database:/fnos-db
+   ${FNOS_DB_DIR}:/fnos-db
    ```
 
-   这是当前用户 NAS 上核实过的路径，其他飞牛安装可能不同。确认目录和数据库文件存在：
+   不同飞牛安装的数据库目录可能不同。确认你填写的路径包含数据库文件：
 
    ```sh
-   ls -la /usr/local/apps/@appdata/trim.media/database
+   ls -la /path/to/fnos/database
    ```
 
-   应能看到 `trimmedia.db`。如果实际路径不同，编辑 `compose.yaml` 中数据库 bind mount 的 `source`，指向**包含 `trimmedia.db` 的整个目录**，不要只挂载单个数据库文件；SQLite 还需要同目录的 WAL/SHM 文件。这个挂载不要设置 `read_only: true`：SQLite 在 `mode=ro` 查询数据库内容时，仍需在 WAL 模式下处理 `-shm` 锁文件。程序自身以只读模式连接数据库，只执行查询，不会更新演员表。缓存卷默认是 `/vol1/docker/fnactor-cache:/config`，需要可写；若更换目录，也修改该 bind mount 的 `source` 并确保 NAS 目录已创建。
+   应能看到 `trimmedia.db`。将示例路径替换为 `.env` 中的 `FNOS_DB_DIR`。它应指向包含数据库文件及其 WAL/SHM 的整个目录，不要只挂载单个数据库文件。这个挂载不要设置 `read_only: true`：SQLite 在 `mode=ro` 查询数据库内容时，仍需在 WAL 模式下处理 `-shm` 锁文件。程序自身以只读模式连接数据库，只执行查询，不会更新演员表。`CACHE_HOST_DIR` 指向可写的持久化目录；按上述目录布局可填写 `../fnactor-cache`。
 
 5. 拉取镜像并先做预览。GitHub Actions 成功后会发布 `latest` 镜像；更新部署时也先拉取最新镜像：
 
@@ -143,7 +145,7 @@ ghcr.io/biaobiaobiao108/fnos-actor-scraper:latest
 
 完成记录若仍缺头像或简介，每 7 天重新评估一次；已完整的演员不做定期重新刮削。重新评估仍通过 API 检查身份和字段锁定，只补可写缺失字段。旧状态缺少 `lookupRevision` 时会自动重新评估一次，后续规则或该演员候选变化也会触发重新评估。
 
-需要持续自动刮削时，显式启动单独的监控服务。首次运行立即扫描整个本地演员库；已有头像和简介分别跳过，只补缺失且未锁定的字段。首轮完成后继续轮询新入库演员。监控状态保存在 `/config/fnactor-state.db`，来源缓存仍保存在 `/config/actors` 和 Gfriends JSON 文件中，两者都由可写的 `/config` 持久化卷保存。旧版 `watch-state.json` 不导入；首次使用 SQLite 状态库时会重新扫描全库，已有资料仍逐字段跳过。失败任务会在 SQLite 中记录次数、错误和下次重试时间，重试间隔逐步延长，最长 24 小时。监控模式必须显式带 `--apply`，因此启动监控服务代表授权它自动写入缺失资料。
+需要持续自动刮削时，显式启动单独的监控服务。首次运行立即扫描整个本地演员库；已有头像和简介分别跳过，只补缺失且未锁定的字段。首轮完成后继续轮询新入库演员。监控状态保存在 `/config/fnactor-state.db`，来源缓存仍保存在 `/config/actors` 和 Gfriends JSON 文件中，两者都由可写的 `/config` 持久化卷保存。旧版 `watch-state.json` 不导入；首次使用 SQLite 状态库时会重新扫描全库，已有资料仍逐字段跳过。失败任务会在 SQLite 中记录次数、错误和下次重试时间，重试间隔逐步延长，最长 24 小时；到期重试会提前唤醒监控，不必等完整轮询周期。遇到上游 403/429 时，本轮停止并将当前演员记为待重试。监控模式必须显式带 `--apply`，因此启动监控服务代表授权它自动写入缺失资料。
 
 ```sh
 # 启动后台监控服务（开启后会随 Docker 重启恢复）
@@ -160,9 +162,9 @@ docker compose --profile watch stop fnactor-watch
 
 ### Compose 挂载与网络说明
 
-默认批量模式通过 SQLite 只读连接从飞牛影视 `person` 数据库表枚举本地演员，不需要媒体目录，也不需要挂载飞牛私有图片目录。只有使用 `--root` 扫描 NFO 筛选任务时，才需在 `compose.yaml` 的 `volumes` 增加媒体目录只读 bind mount，并把容器内路径传给 `--root`。当前 NAS 上 `/vol1/video/movies` 不存在，请使用飞牛媒体库中实际存在的路径。
+默认批量模式通过 SQLite 只读连接从飞牛影视 `person` 数据库表枚举本地演员，不需要媒体目录，也不需要挂载飞牛私有图片目录。只有使用 `--root` 扫描 NFO 筛选任务时，才需在 `compose.yaml` 的 `volumes` 增加媒体目录只读 bind mount，并把容器内路径传给 `--root`。请使用实际包含 NFO 文件的媒体目录。
 
-Compose 使用 `network_mode: host`，这样容器可访问 NAS 本机的 `http://127.0.0.1:5666` API。公网抓取请求可通过 `http_proxy`、`https_proxy` 走代理；`no_proxy`/`NO_PROXY` 必须包含回环地址，否则本机飞牛 API 可能被代理。
+Compose 使用 `network_mode: host`，这样容器可访问 NAS 本机的 `http://127.0.0.1:5666` API。FnOS API 客户端禁用代理并直连；公网抓取请求可通过 `http_proxy`、`https_proxy` 走代理，`no_proxy` 仅控制这些公网请求是否绕过代理。
 
 `.env` 内的口令和令牌是敏感信息，应限制文件权限并确保不提交到 Git。
 
@@ -189,7 +191,7 @@ docker compose run --rm fnactor --actor '三上悠亚' --overwrite --apply
 | --- | --- |
 | `--actor NAME` | 只处理指定演员 |
 | `--db FILE` | 飞牛影视数据库文件；默认取 `FNOS_DB_PATH` 或 `/fnos-db/trimmedia.db` |
-| `--root DIR` | 可选地只读扫描目录中的 NFO，并按演员名筛选任务 |
+| `--root DIR` | 只读扫描目录中的 NFO，并按演员名筛选任务；根路径不是目录或不可读时报错，候选按名称排序后应用 `--limit` |
 | `--cache DIR` | 在线资料缓存目录；默认取 `CACHE_DIR` 或 `/config` |
 | `--limit N` | 本次最多处理人数；`0` 表示不限 |
 | `--concurrency N` | 演员任务并发数；默认 1，最高 2 |
@@ -207,7 +209,11 @@ docker compose run --rm fnactor --actor '三上悠亚' --overwrite --apply
 
 容器建议配置 `mem_limit: 768m`，Go 运行时使用 `GOMEMLIMIT=640MiB`。Go 运行时内存软上限不等于进程的绝对硬限制；容器 cgroup 限制仍是最终边界。可通过 `docker stats fnactor` 观察真实任务峰值。缓存应按演员逐项保存和复用，避免反复加载大型来源数据；头像按单张下载、校验、解码和转换，避免并行保留多张原图与解码像素缓冲。
 
-遇到 403/429 时应暂停批量任务，不要提高并发或增加激进重试。可将 `UPSTREAM_DELAY_MS` 调高后再继续。
+429、常见 5xx 和临时网络问题最多进行两次重试（共三次请求），并遵守 `Retry-After`，等待时间最多 60 秒。最终收到 403/429 后，单次批处理停止后续演员；watch 则记录当前演员的重试状态并结束本轮，到达重试时间后再继续。错误响应体最多读取 512 字节后丢弃，不写入日志；日志中的上游 URL 会移除查询参数。恢复后可将 `UPSTREAM_DELAY_MS` 调高后再继续。
+
+上游只允许无用户信息的 HTTPS 公网地址，DNS 解析结果会拒绝私网、保留及特殊用途 IP；直连时固定到已校验的公网 IP。配置代理时由代理连接外部目标，因此应使用可信代理。FnOS API 客户端禁用代理并直连，`NO_PROXY` 不影响飞牛 API。
+
+来源资料缓存单项超过 1 MiB 时仍可用于当前处理，但跳过磁盘缓存写入。Gfriends 文件树解析限制嵌套深度为 256 层；超限会使本次索引重建失败并保留原有健康索引。
 
 ## 实现概览
 

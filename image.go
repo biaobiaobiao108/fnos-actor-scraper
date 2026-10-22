@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	"net"
+	"net/netip"
 	"net/url"
 	"strings"
 
@@ -101,12 +101,12 @@ func bilinear(a, b, c, d uint8, fx, fy float64) uint8 {
 func clamp(value, minimum, maximum int) int { return max(minimum, min(maximum, value)) }
 
 func isPublicHost(host string) bool {
-	host = strings.Trim(strings.ToLower(host), "[]")
+	host = strings.TrimSuffix(strings.Trim(strings.ToLower(host), "[]"), ".")
 	if host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") {
 		return false
 	}
-	if address := net.ParseIP(host); address != nil {
-		return !address.IsPrivate() && !address.IsLoopback() && !address.IsLinkLocalUnicast() && !address.IsLinkLocalMulticast() && !address.IsUnspecified() && !address.IsMulticast()
+	if address, err := netip.ParseAddr(host); err == nil {
+		return isPublicIP(address)
 	}
-	return !strings.Contains(host, ":")
+	return host != "" && !strings.ContainsAny(host, ":/\\@")
 }

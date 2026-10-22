@@ -36,23 +36,30 @@ func runWatch(o options) error {
 	upstream := NewUpstream()
 	providers := NewProviderService(upstream, o.cache, o.refresh)
 	defer providers.Close()
-	ticker := time.NewTicker(o.watchInterval)
-	defer ticker.Stop()
 	fmt.Printf("\n[WATCH] 监控已启动，首轮检查全库，之后每 %s 检查新增演员；日志输出到 Docker 标准日志。\n", o.watchInterval)
 	for {
 		if err := processNewActors(ctx, client, providers, upstream, o, store); err != nil {
 			fmt.Fprintf(os.Stderr, "[WARN] 监控本轮失败：%v\n", err)
 		}
+		wait := o.watchInterval
+		if retryWait, found, err := store.NextPendingDelay(ctx, time.Now()); err != nil {
+			return err
+		} else if found && retryWait < wait {
+			wait = retryWait
+		}
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			fmt.Println("\n[WATCH] 监控已停止")
 			return nil
-		case <-ticker.C:
+		case <-timer.C:
 		}
 	}
 }
 
 func processNewActors(ctx context.Context, client *FnOSClient, providers *ProviderService, upstream *Upstream, o options, store *watchStore) error {
+	upstream.ResetPause()
 	if err := providers.loadNameAliases(); err != nil {
 		return err
 	}
@@ -87,7 +94,12 @@ func processNewActors(ctx context.Context, client *FnOSClient, providers *Provid
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := processActor(ctx, client, providers, upstream, item, o); err != nil {
+		err := processActor(ctx, client, providers, upstream, item, o)
+		pauseErr := upstream.PauseError()
+		if pauseErr != nil {
+			err = pauseErr
+		}
+		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -96,6 +108,9 @@ func processNewActors(ctx context.Context, client *FnOSClient, providers *Provid
 				return stateErr
 			}
 			fmt.Fprintf(os.Stderr, "[RETRY] %s 处理失败，将在 %s 后重试：%v\n", item.name, retryAfter.Round(time.Second), err)
+			if pauseErr != nil {
+				return pauseErr
+			}
 			continue
 		}
 		if err := store.MarkDone(ctx, taskIdentity(item), item.name, time.Now(), revision); err != nil {

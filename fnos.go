@@ -28,8 +28,10 @@ type FnOSClient struct {
 }
 
 func NewFnOSClient(base, username, password, token string) *FnOSClient {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
 	return &FnOSClient{base: strings.TrimRight(base, "/") + "/v/api/v1", username: username, password: password, token: token,
-		client: &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}}
+		client: &http.Client{Transport: transport, Timeout: 20 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 
 type apiEnvelope struct {
@@ -130,7 +132,7 @@ func (client *FnOSClient) requestOnce(ctx context.Context, path string, method s
 		if response.StatusCode == http.StatusUnauthorized {
 			return &fnosAPIError{path: path, message: "会话已过期", statusCode: response.StatusCode}
 		}
-		return fmt.Errorf("FnOS API %s 返回非 JSON 响应（HTTP %d，Content-Type %s）：%w；请检查 FNOS_URL、容器网络模式和 NO_PROXY", path, response.StatusCode, response.Header.Get("Content-Type"), err)
+		return fmt.Errorf("FnOS API %s 返回非 JSON 响应（HTTP %d，Content-Type %s）：%w；请检查 FNOS_URL 和容器网络模式", path, response.StatusCode, response.Header.Get("Content-Type"), err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 || envelope.Code != nil && *envelope.Code != 0 {
 		message := envelope.Msg
@@ -249,26 +251,51 @@ func (client *FnOSClient) SearchPeople(ctx context.Context, keyword string) ([]F
 		return nil, err
 	}
 	var people []FnPerson
-	if json.Unmarshal(result, &people) == nil {
+	if err := json.Unmarshal(result, &people); err == nil {
 		return people, nil
 	}
 	var wrapper map[string]json.RawMessage
-	if json.Unmarshal(result, &wrapper) != nil {
-		return nil, nil
+	if err := json.Unmarshal(result, &wrapper); err != nil {
+		return nil, fmt.Errorf("解析 FnOS 人物搜索响应失败：未识别的 JSON 结构")
 	}
 	for _, key := range []string{"list", "items", "records", "persons", "data"} {
-		if raw := wrapper[key]; len(raw) > 0 && json.Unmarshal(raw, &people) == nil {
+		if raw, exists := wrapper[key]; exists {
+			if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+				return []FnPerson{}, nil
+			}
+			if err := json.Unmarshal(raw, &people); err != nil {
+				return nil, fmt.Errorf("解析 FnOS 人物搜索响应字段 %q 失败：%w", key, err)
+			}
 			return people, nil
 		}
 	}
-	return nil, nil
+	return nil, fmt.Errorf("解析 FnOS 人物搜索响应失败：缺少已知结果字段")
 }
 
 func (client *FnOSClient) GetEditDetail(ctx context.Context, guid string) (FnPerson, error) {
 	body, _ := json.Marshal(map[string]string{"guid": guid})
+	var payload json.RawMessage
+	if err := client.request(ctx, "/person/getEditDetail", http.MethodPost, bytes.NewReader(body), "application/json", &payload); err != nil {
+		return FnPerson{}, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil || fields == nil {
+		return FnPerson{}, fmt.Errorf("FnOS 编辑详情响应不是 JSON 对象")
+	}
+	for _, field := range []string{"guid", "trim_id", "tmdb_id", "imdb_id", "is_official", "biography_locked", "profile_path_locked"} {
+		value, exists := fields[field]
+		if !exists || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return FnPerson{}, fmt.Errorf("FnOS 编辑详情响应缺少必需字段 %q；请核对 FnOS API 版本", field)
+		}
+	}
 	var person FnPerson
-	err := client.request(ctx, "/person/getEditDetail", http.MethodPost, bytes.NewReader(body), "application/json", &person)
-	return person, err
+	if err := json.Unmarshal(payload, &person); err != nil {
+		return FnPerson{}, fmt.Errorf("解析 FnOS 编辑详情失败：%w", err)
+	}
+	if person.GUID == "" || person.GUID != guid {
+		return FnPerson{}, fmt.Errorf("FnOS 编辑详情返回的 GUID 与请求目标不一致")
+	}
+	return person, nil
 }
 
 func (client *FnOSClient) UploadProfile(ctx context.Context, image []byte) (string, error) {

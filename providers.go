@@ -89,6 +89,9 @@ func (service *ProviderService) ScrapeWithAliases(ctx context.Context, name stri
 		if err != nil {
 			failures = append(failures, fmt.Errorf("名称 %s：%w", lookupName, err))
 		}
+		if isBatchPauseError(err) {
+			break
+		}
 		merged := mergeActorProfiles(name, profiles...)
 		if hasPortraitAndBiography(merged) {
 			break
@@ -108,12 +111,14 @@ func hasPortraitAndBiography(profile *ActorProfile) bool {
 func (service *ProviderService) scrapeOneName(ctx context.Context, name string) (*ActorProfile, error) {
 	profiles := make([]ActorProfile, 0, 4)
 	var failures []error
+	pauseEncountered := false
 
 	recordProvider := func(providerName string, run func() (*ActorProfile, error)) *ActorProfile {
 		p, err := run()
 		if err != nil {
 			fmt.Printf("%s 的来源 %s 查询失败：%v\n", name, providerName, err)
 			failures = append(failures, fmt.Errorf("%s：%w", providerName, err))
+			pauseEncountered = pauseEncountered || isBatchPauseError(err)
 		}
 		if p != nil {
 			profiles = append(profiles, *p)
@@ -125,6 +130,9 @@ func (service *ProviderService) scrapeOneName(ctx context.Context, name string) 
 	recordProvider("Gfriends", func() (*ActorProfile, error) {
 		return service.scrapeGfriends(ctx, name)
 	})
+	if pauseEncountered {
+		return mergeActorProfiles(name, profilePointers(profiles)...), &providerScrapeError{errors: failures}
+	}
 
 	merged := mergeActorProfiles(name, profilePointers(profiles)...)
 
@@ -136,6 +144,9 @@ func (service *ProviderService) scrapeOneName(ctx context.Context, name string) 
 			return scrapeJavDB(ctx, service.upstream, name)
 		})
 		merged = mergeActorProfiles(name, profilePointers(profiles)...)
+		if pauseEncountered {
+			return merged, &providerScrapeError{errors: failures}
+		}
 	}
 
 	// 3. Wikipedia（公网 HTTP）：简介第一来源，亦可补充百科缩略图
@@ -143,6 +154,9 @@ func (service *ProviderService) scrapeOneName(ctx context.Context, name string) 
 		return scrapeWikipedia(ctx, service.upstream, name)
 	})
 	merged = mergeActorProfiles(name, profilePointers(profiles)...)
+	if pauseEncountered {
+		return merged, &providerScrapeError{errors: failures}
+	}
 
 	// 4. Wikidata（公网 HTTP）：若头像与简介均已就绪，跳过 Wikidata，显著降低网络耗时与限流等待。
 	// 仅在仍缺少头像候选或仍缺少简介时作为兜底来源查询。
@@ -151,6 +165,9 @@ func (service *ProviderService) scrapeOneName(ctx context.Context, name string) 
 			return scrapeWikidata(ctx, service.upstream, name)
 		})
 		merged = mergeActorProfiles(name, profilePointers(profiles)...)
+		if pauseEncountered {
+			return merged, &providerScrapeError{errors: failures}
+		}
 	}
 
 	if len(profiles) == 0 {
@@ -161,7 +178,7 @@ func (service *ProviderService) scrapeOneName(ctx context.Context, name string) 
 	}
 
 	// 若资料已完整（同时包含头像和简介），忽略已被更优来源覆盖的次要来源偶发错误
-	if len(failures) > 0 && !hasPortraitAndBiography(merged) {
+	if len(failures) > 0 && (!hasPortraitAndBiography(merged) || pauseEncountered) {
 		return merged, &providerScrapeError{errors: failures}
 	}
 	return merged, nil
@@ -516,7 +533,7 @@ func resolveJavDBURL(value string) (string, error) {
 func javDBBase() (string, error) {
 	value := strings.TrimRight(strings.TrimSpace(getenv("JAVDB_BASE_URL", defaultJavDBBaseURL)), "/")
 	parsed, err := url.Parse(value)
-	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || !isPublicHost(parsed.Hostname()) || parsed.User != nil {
+	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || !isPublicHost(parsed.Hostname()) || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return "", fmt.Errorf("JAVDB_BASE_URL 必须是公网 HTTPS 基础地址")
 	}
 	return value, nil

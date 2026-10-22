@@ -2,17 +2,13 @@
 
 ## 飞牛影视演员资料的位置
 
-飞牛影视演员不是每个演员单独一个 NFO 文件。当前用户 NAS `flymoo` 上核实到，中央演员资料保存在 FnOS Media 数据库 `trimmedia.db` 的 `person` 表，影片与人物的关联保存在 `item_person` 表；头像文件由应用存放在哈希图片目录中。
+飞牛影视演员不是每个演员单独一个 NFO 文件。中央演员资料保存在 FnOS Media 数据库 `trimmedia.db` 的 `person` 表，影片与人物的关联保存在 `item_person` 表；头像文件由应用存放在内部哈希图片目录中。
 
-当前数据库目录：
+部署时通过 `.env` 的 `FNOS_DB_DIR` 指定主机数据库目录，容器内路径固定为 `/fnos-db/trimmedia.db`。
 
-```text
-/usr/local/apps/@appdata/trim.media/database/
-```
+其中除 `trimmedia.db` 外，还可能存在 `trimmedia.db-wal` 和 `trimmedia.db-shm`。因此批量模式应将**整个数据库目录以可写 bind mount**挂载到容器，例如 `/fnos-db`，由 SQLite 自身使用 `mode=ro` 打开主数据库。不要只挂载主库文件，也不要直接编辑、替换或复制覆盖数据库/WAL/SHM。
 
-其中除 `trimmedia.db` 外，还可能存在 `trimmedia.db-wal` 和 `trimmedia.db-shm`。因此批量模式应将**整个数据库目录以只读方式**挂载到容器，例如 `/fnos-db`。不要只挂载主库文件，也不要直接编辑、替换或复制覆盖数据库/WAL/SHM。
-
-默认批量模式从 `person` 表读取本地人物，不扫描电影目录。程序不挂载飞牛应用图片目录，而是通过飞牛 API 上传图片。用户 NAS 上的 `/vol1/video/movies` 不存在；默认无需媒体目录。若显式用 `--root` 从 NFO 筛选演员，需要挂载飞牛媒体库配置中实际存在且含有 NFO 的目录，并只读访问。
+默认批量模式从 `person` 表读取本地人物，不扫描电影目录。程序不挂载飞牛应用图片目录，而是通过飞牛 API 上传图片。默认无需媒体目录。若显式用 `--root` 从 NFO 筛选演员，需要挂载飞牛媒体库中实际存在且含有 NFO 的目录，并只读访问。
 
 ## CLI
 
@@ -23,7 +19,7 @@ fnactor [--actor NAME | --root DIR | --watch] [--db FILE] [--cache DIR] [--limit
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
 | `--actor NAME` | 无 | 仅处理指定演员；不需要数据库挂载 |
-| `--root DIR` | 无 | 递归读取此目录 NFO 演员名，并筛选任务；只读模式 |
+| `--root DIR` | 无 | 递归读取此目录 NFO 演员名，并筛选任务；只读模式。根路径不存在、不是目录或不可读时报错；名称排序后应用 `--limit` |
 | `--db FILE` | `FNOS_DB_PATH` 或 `/fnos-db/trimmedia.db` | 默认批量输入的飞牛影视数据库文件 |
 | `--cache DIR` | `CACHE_DIR` 或 `/config` | 在线来源缓存目录，建议持久化 |
 | `--limit N` | `0` | 限制本次处理人数；`0` 表示不限制 |
@@ -69,7 +65,7 @@ docker compose run --rm fnactor --actor '三上悠亚' --overwrite --apply
 
 监控中标记完成但仍缺头像或简介的记录，每 7 天重新评估；已完整演员不做定期重新刮削。旧状态缺少 `lookupRevision` 时自动重新评估一次，规则升级或该演员候选改变时也会重新评估。重新评估仍先通过 API 检查身份与字段锁定，只补可写的缺失字段。
 
-监控是显式启用的持续模式。首次启动立即扫描当前本地演员库；已有头像和简介按字段分别跳过，只补缺失且未锁定字段。之后按轮询间隔发现新 GUID 并自动处理。启动 Compose 监控服务即明确授权 `--apply` 写入缺失资料。已处理 GUID 和重试状态保存在 `/config/fnactor-state.db`，演员资料缓存继续使用 JSON 文件。旧版 `/config/watch-state.json` 不导入，首次启用 SQLite 状态库会从全库扫描；停止监控后删除 SQLite 数据库及其 WAL/SHM 文件也会重新扫描全库，但现有字段仍会跳过。失败按逐渐延长的间隔重试，最长间隔 24 小时。主要状态日志使用纯文本标签并在区块之间留空行，错误和重试信息仍输出到标准错误。日志由 Docker 收集，可在飞牛 Docker 的该容器“运行日志”中查看。Compose 为日志配置 `json-file` 驱动，最多保留 3 个、每个 10 MiB。暂停和恢复示例：
+监控是显式启用的持续模式。首次启动立即扫描当前本地演员库；已有头像和简介按字段分别跳过，只补缺失且未锁定字段。之后按轮询间隔发现新 GUID 并自动处理。启动 Compose 监控服务即明确授权 `--apply` 写入缺失资料。已处理 GUID 和重试状态保存在 `/config/fnactor-state.db`，演员资料缓存继续使用 JSON 文件。旧版 `/config/watch-state.json` 不导入，首次启用 SQLite 状态库会从全库扫描；停止监控后删除 SQLite 数据库及其 WAL/SHM 文件也会重新扫描全库，但现有字段仍会跳过。失败按逐渐延长的间隔重试，最长间隔 24 小时；监控会在最近待重试任务到期时提前唤醒。上游最终返回 403/429 时结束当前轮次并将当前演员记为待重试。主要状态日志使用纯文本标签并在区块之间留空行，错误和重试信息仍输出到标准错误。日志由 Docker 收集，可在飞牛 Docker 的该容器“运行日志”中查看。Compose 为日志配置 `json-file` 驱动，最多保留 3 个、每个 10 MiB。暂停和恢复示例：
 
 ```sh
 docker compose --profile watch up -d fnactor-watch
@@ -83,27 +79,29 @@ docker compose --profile watch stop fnactor-watch
 
 | 名称 | 必需 | 用途 |
 | --- | --- | --- |
-| `FNOS_URL` | 是 | 飞牛影视 API 地址；host 网络推荐 `http://127.0.0.1:5666` |
+| `FNOS_URL` | 是 | 飞牛影视基础 URL；host 网络推荐 `http://127.0.0.1:5666`，不接受用户信息、查询参数或额外路径 |
 | `FNOS_USERNAME` | 与密码配合 | 飞牛登录用户名 |
 | `FNOS_PASSWORD` | 与用户名配合 | 飞牛登录密码；仅保存在秘密配置中 |
 | `FNOS_TOKEN` | 可选 | 优先使用当前有效的飞牛 API token；配合账号密码可在 HTTP 401 后自动重新登录 |
 | `FNOS_DB_PATH` | 批量模式需要 | 容器内数据库文件路径，Compose 默认 `/fnos-db/trimmedia.db` |
 | `CACHE_DIR` | 否 | 在线来源缓存根目录，默认 `/config` |
+| `FNOS_DB_DIR` | Compose 部署需要 | 主机上包含 `trimmedia.db`、WAL 和 SHM 文件的数据库目录 |
+| `CACHE_HOST_DIR` | Compose 部署需要 | 主机上持久化 `/config` 内容的可写目录 |
 | `UPSTREAM_DELAY_MS` | 否 | 公网上游最小请求间隔，默认 2000 毫秒；请求仍经过全局串行队列 |
-| `JAVDB_BASE_URL` | 否 | JavDB 公网 HTTPS 镜像基础地址，默认 `https://javdb570.com` |
+| `JAVDB_BASE_URL` | 否 | JavDB 公网 HTTPS 镜像基础地址，默认 `https://javdb570.com`；不接受查询参数或片段 |
 | `HTTP_PROXY` / `http_proxy` | 否 | 公网来源 HTTP 代理 |
 | `HTTPS_PROXY` / `https_proxy` | 否 | 公网来源 HTTPS 代理 |
-| `NO_PROXY` / `no_proxy` | 否 | 不经代理访问的地址；默认包含 `localhost,127.0.0.1,::1` |
+| `NO_PROXY` / `no_proxy` | 否 | 公网上游请求的代理绕过列表；默认包含 `localhost,127.0.0.1,::1`。FnOS API 客户端始终直连，不依赖此设置 |
 | `GOMEMLIMIT` | 否 | Go 运行时内存目标；容器推荐 `640MiB` |
 
-代理变量应由部署环境提供，切勿写进源码、镜像或文档中的真实凭据示例。代理仅供公网来源使用；飞牛 API 必须直连本机 loopback。`.env` 含敏感信息，应限制读取权限并确认 Git 忽略。会话 token 返回 HTTP 401 时，如果同时配置了账号密码，程序会自动重新登录并重试该请求一次；只配置 token 时需手动提供新 token。
+代理变量应由部署环境提供，切勿写进源码、镜像或文档中的真实凭据示例。代理仅供公网来源使用；FnOS API 的 HTTP transport 禁用代理。公网 URL 必须是无用户信息的 HTTPS 地址；目标 DNS 不能解析到私网、保留或特殊用途 IP，直连时会固定到已校验的公网地址。配置代理时由代理建立外部连接，因此代理应可信。`.env` 含敏感信息，应限制读取权限并确认 Git 忽略。会话 token 返回 HTTP 401 时，如果同时配置了账号密码，程序会自动重新登录并重试该请求一次；只配置 token 时需手动提供新 token。
 
 ## Docker 部署（飞牛 OS）
 
 1. 从 `.env.example` 创建 `.env`，填写飞牛认证信息和所需代理环境变量；不要提交该文件。
-2. 确认 FnOS 数据库目录实际存在。用户当前 NAS 上的已核实路径为 `/usr/local/apps/@appdata/trim.media/database`，其他设备/升级后可能不同。
+2. 确认 FnOS 数据库目录实际存在，并将它配置为 `.env` 的 `FNOS_DB_DIR`。
 3. 将数据库**目录**挂载至 `/fnos-db`，并将可写缓存目录持久化到 `/config`。数据库连接为 SQLite `mode=ro`，但 Docker 挂载目录本身不能只读，否则 WAL 模式需要的 `-shm` 锁文件无法处理。
-4. 使用 host 网络并把 `FNOS_URL` 设置为 `http://127.0.0.1:5666`；确保 `NO_PROXY` 包含 `localhost,127.0.0.1`。
+4. 使用 host 网络并把 `FNOS_URL` 设置为 `http://127.0.0.1:5666`；FnOS API 客户端会直连，无需依赖 `NO_PROXY`。
 5. 容器设置 `GOMEMLIMIT=640MiB` 和 `mem_limit: 768m`。Go 内存目标不是 cgroup 硬上限；后者才是容器的硬边界。
 6. 先小批量预览，确认人物和待补字段，再使用 `--apply` 实际更新。
 
@@ -112,10 +110,10 @@ docker compose --profile watch stop fnactor-watch
 ```yaml
 volumes:
   - type: bind
-    source: /usr/local/apps/@appdata/trim.media/database
+    source: ${FNOS_DB_DIR}
     target: /fnos-db
   - type: bind
-    source: /vol1/docker/fnactor-cache
+    source: ${CACHE_HOST_DIR}
     target: /config
 ```
 
@@ -125,7 +123,7 @@ volumes:
 
 在线资料查询和头像下载共用一个串行队列，默认两次公网请求间至少 2 秒；演员处理并发默认 1，最高 2。因此提高演员并发不会让多个上游请求同时发出。包含响应处理时间后，实际速度通常更慢。
 
-429、常见 5xx 和临时网络问题仅进行有限重试，并遵守 `Retry-After`。遇到 403/429 时暂停批量任务；恢复后可将 `UPSTREAM_DELAY_MS` 提高到例如 5000–10000 毫秒。避免对全库盲目使用 `--refresh`，这会使已缓存演员重新请求在线来源。
+429、常见 5xx 和临时网络问题最多重试两次（共三次请求），遵守 `Retry-After` 且单次等待最多 60 秒。最终收到 403/429 后，单次批次停止处理后续演员；watch 记录当前演员失败并结束本轮，等该演员重试到期后继续。错误响应体最多读取 512 字节后丢弃，不会记录到日志；日志中的上游 URL 会移除查询参数。来源资料缓存单项超过 1 MiB 时跳过缓存写入，当前处理仍可继续。Gfriends 文件树 JSON 最大嵌套深度为 256，超限时本次重建失败并保留已有健康索引。避免对全库盲目使用 `--refresh`，这会使已缓存演员重新请求在线来源。
 
 ## 图片与内存边界
 
@@ -145,11 +143,11 @@ volumes:
 | `POST /v/api/v1/user/loginByPassword?channel=v2` | 优先使用的飞牛用户登录接口；发送 `username`、SHA-256 十六进制密码摘要和 `app_name=trimemedia-web` |
 | `POST /v/api/v1/login` | 兼容旧版飞牛登录；仅当 v2 接口明确返回 `Invalid Params` 时调用，发送用户名、原始密码和 `app_name=trimemedia-web`，取得会话 token 后继续 API 调用 |
 | `POST /v/api/v1/person/search` | 按名称查找 person |
-| `POST /v/api/v1/person/getEditDetail` | 读取档案、官方标记和字段锁定信息 |
+| `POST /v/api/v1/person/getEditDetail` | 读取档案、官方标记和字段锁定信息；要求响应含匹配的 `guid`、`trim_id`、`tmdb_id`、`imdb_id`、`is_official`、`biography_locked`、`profile_path_locked` |
 | `POST /v/api/v1/image/temp/upload` | 上传 multipart 头像，字段为 `file` 和 `image_type=poster`，取得临时图片标识 |
 | `POST /v/api/v1/person/saveEditDetail` | 保存中央演员档案 |
 
-接口参数和响应以当前飞牛前端实现为准；它们不是公开稳定 API。程序必须在保存前重新校验档案保护状态。升级后若请求失败，应核对新版前端调用，不要绕过 API 写数据库。
+接口参数和响应以当前飞牛前端实现为准；它们不是公开稳定 API。人物搜索必须返回数组或已知数组包装结构，未知 JSON 形状会报错，不会当成“无匹配”。详情响应缺少上述任一必需字段或返回 GUID 与请求目标不同，程序会明确报错停止；编辑详情姓名也必须与检索目标精确匹配。程序必须在保存前重新校验档案保护状态。升级后若请求失败，应核对新版前端调用，不要绕过 API 写数据库。
 
 在线资料来源包括 Gfriends、JavDB、Wikipedia 和 Wikidata。JavDB 的演员搜索卡片可返回独立演员头像，详情页主要是作品列表；本项目只使用精确匹配演员别名后的卡片头像，并忽略 `actor_unknow` 占位图。结构化接口使用 Go 标准库 JSON/XML。头像只从允许的 HTTPS 来源下载，通过格式、字节数和像素数检查后再上传。MDC-NG 还使用 Graphis 作为优先图片源；其演员日志显示 Graphis 对部分演员可用、对其他演员无结果。Graphis 条款限制未经书面许可的自动化采集，因此本项目不直接抓取 Graphis；头像覆盖优先使用 Gfriends/JavDB，Wikipedia/Wikidata 作为补充。MDC-NG 公开仓库未包含后端源码，Graphis 的请求实现无法从公开代码核验。
 
@@ -157,9 +155,9 @@ volumes:
 
 - **数据库打不开**：确认 `/fnos-db/trimmedia.db` 及可能的 WAL/SHM 文件可见，并检查 Docker 是否错误地把数据库目录设为只读。SQLite 连接自身是只读的，但 WAL 模式需要目录可写以处理 `-shm` 锁文件。
 - **数据库 schema 不兼容**：飞牛可能更新了内部数据库结构；确认实际 `person` 列名后更新适配，不要直接猜列或改库。
-- **登录失败**：检查 `FNOS_URL`、账户密码/token 和编辑权限；host 网络推荐回环 API 地址，并确认代理绕过列表含 `127.0.0.1`。
-- **公网来源超时**：检查容器代理变量、代理可达性和 DNS；避免把飞牛 API 地址放进代理链路。
-- **出现 403/429**：暂停任务，等待后调高 `UPSTREAM_DELAY_MS` 再运行。
+- **登录失败**：检查 `FNOS_URL`、账户密码/token 和编辑权限；FnOS API 客户端会直连，不受 HTTP 代理变量影响。
+- **公网来源超时**：检查容器代理变量、代理可达性和 DNS；来源 DNS 若返回私网或保留 IP 会被拒绝。
+- **出现 403/429**：当前单次批次或 watch 轮次会停止；等待重试后可调高 `UPSTREAM_DELAY_MS`。
 - **头像失败**：检查来源图片链接、下载大小/格式/像素限制和 FnOS 上传权限。
 - **官方/在线人物被跳过**：这是预期保护行为，覆盖选项不会解除保护。
 - **内存偏高**：用 `docker stats fnactor` 观测；确认并发不超过 2，图片逐张处理，响应体与缓存都有界。

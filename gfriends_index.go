@@ -21,6 +21,7 @@ import (
 const gfriendsIndexVersion = "2"
 const gfriendsIndexCheckInterval = time.Minute
 const maxGfriendsPortraitCandidates = 16
+const maxGfriendsJSONDepth = 256
 
 type gfriendsIndexRefreshError struct{ err error }
 
@@ -286,7 +287,7 @@ func decodeGfriendsTree(ctx context.Context, decoder *json.Decoder, insert *sql.
 			if valueToken != json.Delim('{') {
 				return fmt.Errorf("Content 节点不是对象")
 			}
-			if err := indexGfriendsObjectBody(ctx, decoder, []string{"Content"}, insert); err != nil {
+			if err := indexGfriendsObjectBody(ctx, decoder, []string{"Content"}, insert, 0); err != nil {
 				return err
 			}
 			continue
@@ -304,7 +305,10 @@ func decodeGfriendsTree(ctx context.Context, decoder *json.Decoder, insert *sql.
 	return nil
 }
 
-func indexGfriendsObjectBody(ctx context.Context, decoder *json.Decoder, parents []string, insert *sql.Stmt) error {
+func indexGfriendsObjectBody(ctx context.Context, decoder *json.Decoder, parents []string, insert *sql.Stmt, depth int) error {
+	if depth > maxGfriendsJSONDepth {
+		return fmt.Errorf("Gfriends 文件树嵌套超过 %d 层限制", maxGfriendsJSONDepth)
+	}
 	for decoder.More() {
 		keyToken, err := decoder.Token()
 		if err != nil {
@@ -319,7 +323,7 @@ func indexGfriendsObjectBody(ctx context.Context, decoder *json.Decoder, parents
 			return err
 		}
 		if key == "Information" {
-			if err := skipJSONValue(decoder, valueToken); err != nil {
+			if err := skipJSONValueDepth(decoder, valueToken, depth+1); err != nil {
 				return err
 			}
 			continue
@@ -327,10 +331,13 @@ func indexGfriendsObjectBody(ctx context.Context, decoder *json.Decoder, parents
 		switch value := valueToken.(type) {
 		case json.Delim:
 			if value == '{' {
-				if err := indexGfriendsObjectBody(ctx, decoder, appendPath(parents, key), insert); err != nil {
+				parents = append(parents, key)
+				err := indexGfriendsObjectBody(ctx, decoder, parents, insert, depth+1)
+				parents = parents[:len(parents)-1]
+				if err != nil {
 					return err
 				}
-			} else if err := skipJSONValue(decoder, valueToken); err != nil {
+			} else if err := skipJSONValueDepth(decoder, valueToken, depth+1); err != nil {
 				return err
 			}
 		case string:
@@ -352,6 +359,13 @@ func indexGfriendsObjectBody(ctx context.Context, decoder *json.Decoder, parents
 }
 
 func skipJSONValue(decoder *json.Decoder, token json.Token) error {
+	return skipJSONValueDepth(decoder, token, 0)
+}
+
+func skipJSONValueDepth(decoder *json.Decoder, token json.Token, depth int) error {
+	if depth > maxGfriendsJSONDepth {
+		return fmt.Errorf("Gfriends 文件树嵌套超过 %d 层限制", maxGfriendsJSONDepth)
+	}
 	delimiter, ok := token.(json.Delim)
 	if !ok {
 		return nil
@@ -366,7 +380,7 @@ func skipJSONValue(decoder *json.Decoder, token json.Token) error {
 			if err != nil {
 				return err
 			}
-			if err := skipJSONValue(decoder, value); err != nil {
+			if err := skipJSONValueDepth(decoder, value, depth+1); err != nil {
 				return err
 			}
 		}
@@ -378,7 +392,7 @@ func skipJSONValue(decoder *json.Decoder, token json.Token) error {
 			if err != nil {
 				return err
 			}
-			if err := skipJSONValue(decoder, value); err != nil {
+			if err := skipJSONValueDepth(decoder, value, depth+1); err != nil {
 				return err
 			}
 		}

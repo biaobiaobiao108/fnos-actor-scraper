@@ -7,11 +7,14 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -178,15 +181,22 @@ func run() error {
 	}
 	jobs := make(chan task)
 	results := make(chan error, len(tasks))
+	batchCtx, cancelBatch := context.WithCancelCause(ctx)
+	defer cancelBatch(nil)
 	workers := min(o.concurrency, len(tasks))
 	for range workers {
 		go func() {
 			for item := range jobs {
-				if err := ctx.Err(); err != nil {
-					results <- err
+				if err := batchCtx.Err(); err != nil {
+					results <- context.Cause(batchCtx)
 					continue
 				}
-				results <- processActor(ctx, client, providers, upstream, item, o)
+				err := processActor(batchCtx, client, providers, upstream, item, o)
+				if pauseErr := upstream.PauseError(); pauseErr != nil {
+					cancelBatch(pauseErr)
+					err = pauseErr
+				}
+				results <- err
 			}
 		}()
 	}
@@ -216,7 +226,13 @@ func collectTasks(o options) ([]task, error) {
 		}
 		result := make([]task, 0, len(actors))
 		skippedNumeric := 0
-		for _, actor := range actors {
+		keys := make([]string, 0, len(actors))
+		for key := range actors {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			actor := actors[key]
 			if isNumericActorName(actor.name) {
 				skippedNumeric++
 				continue
@@ -294,9 +310,13 @@ func processActor(ctx context.Context, client *FnOSClient, providers *ProviderSe
 		fmt.Printf("  [SKIP] 找到 %d 个同名档案，无法安全判断目标\n", len(matches))
 		return nil
 	}
-	detail, err := client.GetEditDetail(ctx, matches[0].GUID)
+	requestedGUID := matches[0].GUID
+	detail, err := client.GetEditDetail(ctx, requestedGUID)
 	if err != nil {
 		return fmt.Errorf("%s 读取飞牛档案失败：%w", name, err)
+	}
+	if !exactNameMatch(detail, name) {
+		return fmt.Errorf("%s 飞牛编辑详情中的姓名与检索目标不匹配", name)
 	}
 	if !isLocalPerson(detail) {
 		fmt.Println("  [SKIP] 该档案不是可安全修改的本地演员资料（官方/在线资料受保护）")
@@ -322,7 +342,7 @@ func processActor(ctx context.Context, client *FnOSClient, providers *ProviderSe
 			wanted = append(wanted, "简介")
 		}
 		fmt.Printf("  [INFO] 来源未找到可用%s；已有字段保持不变\n", strings.Join(wanted, "和"))
-		if isRetryableUpstreamError(scrapeErr) {
+		if isRetryableUpstreamError(scrapeErr) || isBatchPauseError(scrapeErr) {
 			return scrapeErr
 		}
 		return nil
@@ -331,7 +351,7 @@ func processActor(ctx context.Context, client *FnOSClient, providers *ProviderSe
 	canImage := canTryImage && len(portraitCandidates(profile)) > 0
 	if !canBio && !canImage {
 		printNoWritableFields(detail, profile, hasBio, hasImage, o.overwrite)
-		if isRetryableUpstreamError(scrapeErr) {
+		if isRetryableUpstreamError(scrapeErr) || isBatchPauseError(scrapeErr) {
 			return scrapeErr
 		}
 		return nil
@@ -339,7 +359,7 @@ func processActor(ctx context.Context, client *FnOSClient, providers *ProviderSe
 	var image []byte
 	imageSource := ""
 	retryErr := scrapeErr
-	if !isRetryableUpstreamError(retryErr) {
+	if !isRetryableUpstreamError(retryErr) && !isBatchPauseError(retryErr) {
 		retryErr = nil
 	}
 	if canImage {
@@ -347,7 +367,7 @@ func processActor(ctx context.Context, client *FnOSClient, providers *ProviderSe
 			image, err = fetchPortrait(ctx, upstream, candidate.URL)
 			if err != nil {
 				fmt.Printf("  来源 %s 的头像处理失败，尝试下一来源：%v\n", candidate.Source, err)
-				if retryErr == nil && isRetryableUpstreamError(err) {
+				if retryErr == nil && (isRetryableUpstreamError(err) || isBatchPauseError(err)) {
 					retryErr = err
 				}
 				continue
@@ -395,7 +415,7 @@ func processActor(ctx context.Context, client *FnOSClient, providers *ProviderSe
 	}
 	gotNeededImage := !canTryImage || len(image) > 0
 	gotNeededBio := !canTryBio || canBio
-	if gotNeededImage && gotNeededBio {
+	if gotNeededImage && gotNeededBio && !isBatchPauseError(retryErr) {
 		retryErr = nil
 	}
 	return retryErr
@@ -496,7 +516,7 @@ func cachedScrape(ctx context.Context, providers *ProviderService, name string, 
 	if cachedProfile != nil {
 		profile = mergeActorProfiles(name, cachedProfile, profile)
 	}
-	if profile == nil || isRetryableUpstreamError(err) {
+	if profile == nil || isRetryableUpstreamError(err) || isBatchPauseError(err) {
 		return profile, err
 	}
 	profile.LookupRevision = revision
@@ -506,6 +526,10 @@ func cachedScrape(ctx context.Context, providers *ProviderService, name string, 
 	data, err := json.Marshal(profile)
 	if err != nil {
 		return profile, err
+	}
+	if len(data) > 1<<20 {
+		fmt.Printf("%s 的来源资料超过 1 MiB，跳过缓存写入\n", name)
+		return profile, nil
 	}
 	if err := writeFileAtomic(file, data, 0o640); err != nil {
 		return profile, fmt.Errorf("写入演员缓存失败：%w", err)
@@ -523,7 +547,7 @@ func probe(ctx context.Context, name string, o options) error {
 	}
 	profile, scrapeErr := providers.Scrape(ctx, name)
 	if profile == nil {
-		if isRetryableUpstreamError(scrapeErr) {
+		if isRetryableUpstreamError(scrapeErr) || isBatchPauseError(scrapeErr) {
 			return scrapeErr
 		}
 		fmt.Printf("没有找到可用资料（耗时 %s）\n", time.Since(started).Round(time.Millisecond))
@@ -539,6 +563,9 @@ func probe(ctx context.Context, name string, o options) error {
 			portrait, err := fetchPortrait(ctx, upstream, candidate.URL)
 			if err != nil {
 				fmt.Printf("来源 %s 头像处理失败，尝试下一来源：%v\n", candidate.Source, err)
+				if isBatchPauseError(err) {
+					return err
+				}
 				continue
 			}
 			fmt.Printf("头像处理成功，使用来源 %s：JPEG %d 字节\n", candidate.Source, len(portrait))
@@ -553,7 +580,10 @@ func probe(ctx context.Context, name string, o options) error {
 	runtime.GC()
 	runtime.ReadMemStats(&stats)
 	fmt.Printf("诊断完成：耗时 %s，GC 后 Go 堆占用 %.1f MiB，Go 运行时保留内存 %.1f MiB\n", time.Since(started).Round(time.Millisecond), float64(stats.HeapAlloc)/1048576, float64(stats.Sys)/1048576)
-	if isRetryableUpstreamError(scrapeErr) {
+	if pauseErr := upstream.PauseError(); pauseErr != nil {
+		return pauseErr
+	}
+	if isRetryableUpstreamError(scrapeErr) || isBatchPauseError(scrapeErr) {
 		return scrapeErr
 	}
 	return nil
@@ -566,13 +596,24 @@ func isLocalPerson(person FnPerson) bool {
 	return !person.IsOfficial && strings.HasPrefix(strings.ToUpper(person.TrimID), "LOCAL_PERSON_") && person.TMDBID == 0 && person.IMDBID == ""
 }
 func validateFnOSURL(value string) error {
-	if strings.HasPrefix(value, "https://") {
-		return nil
+	target, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || target.Opaque != "" || target.Hostname() == "" || target.User != nil ||
+		target.RawQuery != "" || target.ForceQuery || target.Fragment != "" || target.RawFragment != "" || target.Path != "" && target.Path != "/" {
+		return fmt.Errorf("FNOS_URL 必须是没有用户信息、查询参数或路径的有效基础 URL")
 	}
-	if strings.HasPrefix(value, "http://127.0.0.1:") || strings.HasPrefix(value, "http://localhost:") {
+	switch strings.ToLower(target.Scheme) {
+	case "https":
 		return nil
+	case "http":
+		host := target.Hostname()
+		if strings.EqualFold(host, "localhost") {
+			return nil
+		}
+		if address := net.ParseIP(host); address != nil && address.IsLoopback() {
+			return nil
+		}
 	}
-	return fmt.Errorf("FNOS_URL 必须使用 HTTPS（HTTP 仅允许本机 localhost/127.0.0.1）")
+	return fmt.Errorf("FNOS_URL 必须使用 HTTPS（HTTP 仅允许本机 loopback 地址）")
 }
 func nonempty(values []string) []string {
 	result := values[:0]
