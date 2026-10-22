@@ -282,7 +282,7 @@ func (client *FnOSClient) GetEditDetail(ctx context.Context, guid string) (FnPer
 	if err := json.Unmarshal(payload, &fields); err != nil || fields == nil {
 		return FnPerson{}, fmt.Errorf("FnOS 编辑详情响应不是 JSON 对象")
 	}
-	for _, field := range []string{"guid", "trim_id", "tmdb_id", "imdb_id", "is_official", "biography_locked", "profile_path_locked"} {
+	for _, field := range []string{"guid", "trim_id", "is_official", "biography_locked", "profile_path_locked"} {
 		value, exists := fields[field]
 		if !exists || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
 			return FnPerson{}, fmt.Errorf("FnOS 编辑详情响应缺少必需字段 %q；请核对 FnOS API 版本", field)

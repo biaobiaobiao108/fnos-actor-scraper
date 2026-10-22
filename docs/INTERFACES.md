@@ -143,11 +143,11 @@ volumes:
 | `POST /v/api/v1/user/loginByPassword?channel=v2` | 优先使用的飞牛用户登录接口；发送 `username`、SHA-256 十六进制密码摘要和 `app_name=trimemedia-web` |
 | `POST /v/api/v1/login` | 兼容旧版飞牛登录；仅当 v2 接口明确返回 `Invalid Params` 时调用，发送用户名、原始密码和 `app_name=trimemedia-web`，取得会话 token 后继续 API 调用 |
 | `POST /v/api/v1/person/search` | 按名称查找 person |
-| `POST /v/api/v1/person/getEditDetail` | 读取档案、官方标记和字段锁定信息；要求响应含匹配的 `guid`、`trim_id`、`tmdb_id`、`imdb_id`、`is_official`、`biography_locked`、`profile_path_locked` |
+| `POST /v/api/v1/person/getEditDetail` | 读取档案、官方标记和字段锁定信息；要求响应含匹配的 `guid`、`trim_id`、`is_official`、`biography_locked`、`profile_path_locked`。没有外部身份时 `tmdb_id`、`imdb_id` 可省略或为 `null` |
 | `POST /v/api/v1/image/temp/upload` | 上传 multipart 头像，字段为 `file` 和 `image_type=poster`，取得临时图片标识 |
 | `POST /v/api/v1/person/saveEditDetail` | 保存中央演员档案 |
 
-接口参数和响应以当前飞牛前端实现为准；它们不是公开稳定 API。人物搜索必须返回数组或已知数组包装结构，未知 JSON 形状会报错，不会当成“无匹配”。详情响应缺少上述任一必需字段或返回 GUID 与请求目标不同，程序会明确报错停止。姓名只用于初次搜索并筛选唯一档案；读取详情后以请求目标 GUID 确认档案身份，避免字体差异造成误拒绝。程序必须在保存前重新校验档案保护状态。升级后若请求失败，应核对新版前端调用，不要绕过 API 写数据库。
+接口参数和响应以当前飞牛前端实现为准；它们不是公开稳定 API。人物搜索必须返回数组或已知数组包装结构，未知 JSON 形状会报错，不会当成“无匹配”。详情响应缺少上述必需字段或返回 GUID 与请求目标不同，程序会明确报错停止；`tmdb_id`、`imdb_id` 是可选外部身份字段，缺省时按无对应身份处理。姓名只用于初次搜索并筛选唯一档案；读取详情后以请求目标 GUID 确认档案身份，避免字体差异造成误拒绝。程序必须在保存前重新校验档案保护状态。升级后若请求失败，应核对新版前端调用，不要绕过 API 写数据库。
 
 在线资料来源包括 Gfriends、JavDB、Wikipedia 和 Wikidata。JavDB 的演员搜索卡片可返回独立演员头像，详情页主要是作品列表；本项目只使用精确匹配演员别名后的卡片头像，并忽略 `actor_unknow` 占位图。结构化接口使用 Go 标准库 JSON/XML。头像只从允许的 HTTPS 来源下载，通过格式、字节数和像素数检查后再上传。MDC-NG 还使用 Graphis 作为优先图片源；其演员日志显示 Graphis 对部分演员可用、对其他演员无结果。Graphis 条款限制未经书面许可的自动化采集，因此本项目不直接抓取 Graphis；头像覆盖优先使用 Gfriends/JavDB，Wikipedia/Wikidata 作为补充。MDC-NG 公开仓库未包含后端源码，Graphis 的请求实现无法从公开代码核验。
 
