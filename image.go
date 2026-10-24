@@ -18,7 +18,7 @@ import (
 
 const maxImageDownload int64 = 10 << 20
 const maxImageOutput = 4 << 20
-const maxImagePixels int64 = 4_000_000
+const maxImagePixels int64 = 16_000_000
 
 func fetchPortrait(ctx context.Context, upstream *Upstream, address string) ([]byte, error) {
 	target, err := url.Parse(address)
@@ -34,7 +34,7 @@ func fetchPortrait(ctx context.Context, upstream *Upstream, address string) ([]b
 		return nil, fmt.Errorf("无法识别头像图片：%w", err)
 	}
 	if config.Width <= 0 || config.Height <= 0 || int64(config.Width)*int64(config.Height) > maxImagePixels {
-		return nil, fmt.Errorf("头像原图超过 400 万像素限制")
+		return nil, fmt.Errorf("头像原图超过 1600 万像素限制")
 	}
 	decoded, _, err := image.Decode(bytes.NewReader(body))
 	if err != nil {
