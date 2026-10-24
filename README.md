@@ -225,7 +225,7 @@ docker compose run --rm fnactor --actor '三上悠亚' --overwrite --apply
 - 在线来源包括 Gfriends、JavDB 和 Wikidata。头像按 Gfriends、JavDB 演员搜索卡片、Wikidata 的优先级逐个尝试，当前候选处理失败会回退到下一来源；简介采用 Wikidata。JavDB 只按精确演员名/别名匹配，不采信占位头像；它不提供可靠简介。缓存存放在 `/config`。
 - 飞牛 API 是其 Web 前端使用的内部接口，飞牛版本升级时可能变化；请求会附带前端客户端标识和签名，版本变化时需对照 NAS 前端资源核验。
 
-详细架构、接口、部署配置与故障排查见[实现与架构](docs/ARCHITECTURE.md)和[接口与使用说明](docs/INTERFACES.md)。项目协作规范见 [AGENTS.md](AGENTS.md)。
+详细架构、接口、部署配置与故障排查见[实现与架构](docs/ARCHITECTURE.md)、[总体架构图](docs/ARCHITECTURE_DIAGRAM.html)和[接口与使用说明](docs/INTERFACES.md)。项目协作规范见 [AGENTS.md](AGENTS.md)。
 
 ## 本地开发
 

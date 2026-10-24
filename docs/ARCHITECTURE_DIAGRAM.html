@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="fnactor 演员资料补全工具的任务流、来源查询、缓存和写入保护架构图。">
+  <title>fnactor 总体架构</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Inter, "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+      color: #202833;
+      background: #f4f6f8;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 28px; }
+    main { max-width: 1780px; margin: 0 auto; }
+    header { margin: 0 0 18px; }
+    h1 { margin: 0 0 7px; font-size: clamp(24px, 3vw, 34px); letter-spacing: -.02em; }
+    header p { margin: 0; color: #566170; font-size: 15px; }
+    .legend { display: flex; flex-wrap: wrap; gap: 10px 18px; margin: 18px 0 16px; color: #4c5664; font-size: 13px; }
+    .legend span { display: inline-flex; align-items: center; gap: 7px; }
+    .swatch { width: 14px; height: 14px; border: 2px solid; border-radius: 4px; }
+    .swatch.blue { background: #e7f0ff; border-color: #3566c5; }
+    .swatch.purple { background: #f0eaff; border-color: #7841bd; }
+    .swatch.orange { background: #fff0df; border-color: #a8520b; }
+    .swatch.green { background: #e4f5ea; border-color: #18754a; }
+    .swatch.red { background: #fff0f0; border-color: #bd3434; }
+    figure { margin: 0; overflow-x: auto; border: 1px solid #d8dde4; border-radius: 14px; background: #fff; }
+    svg { display: block; width: 100%; min-width: 1060px; height: auto; }
+    figcaption { padding: 10px 16px; color: #657080; border-top: 1px solid #e3e7ec; font-size: 12px; }
+    footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 18px; margin-top: 14px; color: #596574; font-size: 13px; }
+    footer a { color: #315fb5; text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
+    @media print {
+      @page { size: landscape; margin: 10mm; }
+      body { padding: 0; background: white; }
+      main { max-width: none; }
+      figure { border: 0; overflow: visible; }
+      svg { min-width: 0; width: 100%; }
+      .legend, footer { font-size: 10pt; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>fnactor 总体架构</h1>
+      <p>本地名单只读 → 按字段判定 → 按需查询来源 → 预览或通过 FnOS API 写入</p>
+    </header>
+
+    <div class="legend" aria-label="图例">
+      <span><i class="swatch blue"></i>本地输入与任务收集</span>
+      <span><i class="swatch purple"></i>单演员处理与资料合并</span>
+      <span><i class="swatch orange"></i>公网来源与请求控制</span>
+      <span><i class="swatch green"></i>飞牛 API</span>
+      <span><i class="swatch red"></i>保护条件</span>
+    </div>
+
+    <figure>
+      <svg viewBox="0 0 2000 1640" role="img" aria-labelledby="diagram-title diagram-desc" xmlns="http://www.w3.org/2000/svg">
+        <title id="diagram-title">fnactor 总体架构图</title>
+        <desc id="diagram-desc">从命令行和只读数据源收集演员任务，读取飞牛档案并检查保护条件，按候选名称查询缓存与三个来源，最后预览或经飞牛 API 写入；公网请求与飞牛 API 使用不同网络通道。</desc>
+        <defs>
+          <marker id="arrow-blue" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="#3566c5"/></marker>
+          <marker id="arrow-purple" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="#7841bd"/></marker>
+          <marker id="arrow-orange" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="#a8520b"/></marker>
+          <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="#18754a"/></marker>
+          <marker id="arrow-red" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="#bd3434"/></marker>
+          <style>
+            .panel { stroke-width: 2; stroke-dasharray: 9 7; }
+            .panel-title { font-size: 20px; font-weight: 700; }
+            .node { stroke-width: 2; rx: 10; }
+            .node-title { font-size: 18px; font-weight: 700; fill: #202833; }
+            .node-body { font-size: 14px; fill: #4f5b69; }
+            .small { font-size: 12px; fill: #596574; }
+            .connector { fill: none; stroke-width: 2.5; }
+            .dashed { stroke-dasharray: 7 6; }
+            .tag { font-size: 12px; font-weight: 700; }
+          </style>
+        </defs>
+
+        <!-- 1. Task entry and candidate collection -->
+        <rect class="panel" x="45" y="25" width="1910" height="285" rx="16" fill="#f5f8ff" stroke="#3566c5"/>
+        <text class="panel-title" x="72" y="62" fill="#2857ad">1. 入口与任务收集</text>
+
+        <rect class="node" x="75" y="95" width="300" height="145" fill="#e7f0ff" stroke="#3566c5"/>
+        <text class="node-title" x="98" y="128">Docker / CLI</text>
+        <text class="node-body" x="98" y="157">无参数：打印用法并空闲</text>
+        <text class="node-body" x="98" y="181">默认预览；--apply 才写入</text>
+        <text class="node-body" x="98" y="205">--probe --actor：只走来源诊断</text>
+
+        <rect class="panel" x="415" y="95" width="1100" height="145" rx="10" fill="#f8faff" stroke="#6c8dd1"/>
+        <text class="tag" x="438" y="121" fill="#2857ad">候选输入（按运行模式选择一条）</text>
+        <rect class="node" x="435" y="137" width="330" height="82" fill="#e7f0ff" stroke="#3566c5"/>
+        <text class="node-title" x="455" y="165">默认批量 / --watch</text>
+        <text class="node-body" x="455" y="193">SQLite mode=ro · GUID 与名称</text>
+
+        <rect class="node" x="790" y="137" width="330" height="82" fill="#e7f0ff" stroke="#3566c5"/>
+        <text class="node-title" x="810" y="165">--root DIR</text>
+        <text class="node-body" x="810" y="193">只读扫描 NFO 名称，不定位档案</text>
+
+        <rect class="node" x="1145" y="137" width="350" height="82" fill="#e7f0ff" stroke="#3566c5"/>
+        <text class="node-title" x="1165" y="165">--actor NAME</text>
+        <text class="node-body" x="1165" y="193">单人名称任务，无需数据库</text>
+
+        <rect class="node" x="1555" y="95" width="360" height="145" fill="#e7f0ff" stroke="#3566c5"/>
+        <text class="node-title" x="1578" y="128">collectTasks</text>
+        <text class="node-body" x="1578" y="157">构造本轮演员任务列表</text>
+        <text class="node-body" x="1578" y="181">watch：首轮全扫；后续按状态过滤</text>
+        <text class="node-body" x="1578" y="205">演员任务并发最多 2</text>
+
+        <path class="connector" d="M375 167H405" stroke="#3566c5" marker-end="url(#arrow-blue)"/>
+        <path class="connector" d="M1515 167H1545" stroke="#3566c5" marker-end="url(#arrow-blue)"/>
+        <path class="connector" d="M1735 240H1970V395H225V405" stroke="#3566c5" marker-end="url(#arrow-blue)"/>
+        <text class="small" x="77" y="278">数据库目录允许 SQLite 处理 WAL/SHM 协调文件；程序不通过 SQL 写入。</text>
+        <text class="small" x="1080" y="278">--watch 必须显式 --apply；--probe 不登录飞牛、不写资料。</text>
+
+        <!-- 2. Per-actor identity and field guards -->
+        <rect class="panel" x="45" y="340" width="1910" height="300" rx="16" fill="#fbf9ff" stroke="#7841bd"/>
+        <text class="panel-title" x="72" y="377" fill="#6933a9">2. 单演员处理与保护</text>
+
+        <rect class="node" x="75" y="415" width="300" height="155" fill="#f0eaff" stroke="#7841bd"/>
+        <text class="node-title" x="98" y="448">task</text>
+        <text class="node-body" x="98" y="477">名称、GUID（数据库模式）</text>
+        <text class="node-body" x="98" y="501">原名 / 已确认别名</text>
+        <text class="node-body" x="98" y="525">逐演员进入 processActor</text>
+
+        <rect class="node" x="415" y="415" width="390" height="155" fill="#f0eaff" stroke="#7841bd"/>
+        <text class="node-title" x="438" y="448">定位 FnOS 档案</text>
+        <text class="node-body" x="438" y="477">数据库任务：GUID 直接取详情</text>
+        <text class="node-body" x="438" y="501">名称任务：SearchPeople</text>
+        <text class="node-body" x="438" y="525">规范化精确匹配且必须唯一</text>
+
+        <rect class="node" x="845" y="415" width="430" height="155" fill="#e4f5ea" stroke="#18754a"/>
+        <text class="node-title" x="868" y="448">FnOS GetEditDetail</text>
+        <text class="node-body" x="868" y="477">确认 GUID 与本地档案身份</text>
+        <text class="node-body" x="868" y="501">跳过官方及已有 TMDb / IMDb</text>
+        <text class="node-body" x="868" y="525">读取字段内容与锁定状态</text>
+
+        <rect class="node" x="1315" y="415" width="600" height="155" fill="#fff0f0" stroke="#bd3434"/>
+        <text class="node-title" x="1338" y="448">逐字段保护闸门</text>
+        <text class="node-body" x="1338" y="477">头像、简介分别判断：只补缺失且未锁定字段</text>
+        <text class="node-body" x="1338" y="501">--overwrite 仍受本地身份与锁定保护</text>
+        <text class="node-body" x="1338" y="525">没有可写字段则跳过；此详情在来源查询前读取</text>
+
+        <path class="connector" d="M375 492H405" stroke="#7841bd" marker-end="url(#arrow-purple)"/>
+        <path class="connector" d="M805 492H835" stroke="#7841bd" marker-end="url(#arrow-purple)"/>
+        <path class="connector" d="M1275 492H1305" stroke="#bd3434" marker-end="url(#arrow-red)"/>
+        <path class="connector" d="M1615 570V655H1970V745H265" stroke="#7841bd" marker-end="url(#arrow-purple)"/>
+        <text class="small" x="90" y="625">通过保护检查后才查资料；默认预览，不创建人物。</text>
+
+        <!-- 3. Cache, candidate names and provider orchestration -->
+        <rect class="panel" x="45" y="675" width="1910" height="260" rx="16" fill="#faf8ff" stroke="#7841bd"/>
+        <text class="panel-title" x="72" y="712" fill="#6933a9">3. 缓存、候选名称与来源调度</text>
+
+        <rect class="node" x="75" y="750" width="380" height="145" fill="#f0eaff" stroke="#7841bd"/>
+        <text class="node-title" x="98" y="783">cachedScrape</text>
+        <text class="node-body" x="98" y="812">按 lookupRevision 校验 JSON 缓存</text>
+        <text class="node-body" x="98" y="836">完整资料 30 天 · 部分资料 7 天</text>
+        <text class="node-body" x="98" y="860">--refresh 忽略演员资料缓存</text>
+
+        <rect class="node" x="495" y="750" width="430" height="145" fill="#f0eaff" stroke="#7841bd"/>
+        <text class="node-title" x="518" y="783">候选名称生成</text>
+        <text class="node-body" x="518" y="812">显示名 → original_name → 确认别名</text>
+        <text class="node-body" x="518" y="836">简转繁 → 繁转日文新字体</text>
+        <text class="node-body" x="518" y="860">只作公网查询，不用于选 FnOS 档案</text>
+
+        <rect class="node" x="965" y="750" width="500" height="145" fill="#f0eaff" stroke="#7841bd"/>
+        <text class="node-title" x="988" y="783">ProviderService</text>
+        <text class="node-body" x="988" y="812">按需调度并合并头像候选与简介</text>
+        <text class="node-body" x="988" y="836">Gfriends 命中头像时跳过 JavDB</text>
+        <text class="node-body" x="988" y="860">仍缺头像或简介时查询 Wikidata</text>
+
+        <rect class="node" x="1505" y="750" width="410" height="145" fill="#f0eaff" stroke="#7841bd"/>
+        <text class="node-title" x="1528" y="783">ActorProfile</text>
+        <text class="node-body" x="1528" y="812">来源、别名、简介和头像候选</text>
+        <text class="node-body" x="1528" y="836">按来源优先级合并，不模糊匹配</text>
+        <text class="node-body" x="1528" y="860">图片失败可继续下一候选</text>
+
+        <path class="connector" d="M455 822H485" stroke="#7841bd" marker-end="url(#arrow-purple)"/>
+        <path class="connector" d="M925 822H955" stroke="#7841bd" marker-end="url(#arrow-purple)"/>
+        <path class="connector" d="M1465 822H1495" stroke="#7841bd" marker-end="url(#arrow-purple)"/>
+
+        <!-- 4. Source adapters and shared public egress -->
+        <rect class="panel" x="45" y="970" width="1910" height="280" rx="16" fill="#fffaf4" stroke="#a8520b"/>
+        <text class="panel-title" x="72" y="1007" fill="#914305">4. 来源适配器与共享公网出口</text>
+
+        <rect class="node" x="75" y="1045" width="440" height="155" fill="#fff0df" stroke="#a8520b"/>
+        <text class="node-title" x="98" y="1078">Gfriends</text>
+        <text class="node-body" x="98" y="1107">Filetree 缓存 24h → 流式解析 → SQLite</text>
+        <text class="node-body" x="98" y="1131">事务重建索引；本地精确名称查询</text>
+        <text class="node-body" x="98" y="1155">最多回退 16 张；树 / 头像走公网出口</text>
+
+        <rect class="node" x="550" y="1045" width="390" height="155" fill="#fff0df" stroke="#a8520b"/>
+        <text class="node-title" x="573" y="1078">JavDB</text>
+        <text class="node-body" x="573" y="1107">演员搜索 HTML</text>
+        <text class="node-body" x="573" y="1131">精确匹配别名，只提供头像候选</text>
+        <text class="node-body" x="573" y="1155">不采信占位图</text>
+
+        <rect class="node" x="975" y="1045" width="400" height="155" fill="#fff0df" stroke="#a8520b"/>
+        <text class="node-title" x="998" y="1078">Wikidata / Commons</text>
+        <text class="node-body" x="998" y="1107">精确实体匹配 → 简介和 P18 图片</text>
+        <text class="node-body" x="998" y="1131">Commons API 请求 640px 缩略图</text>
+        <text class="node-body" x="998" y="1155">仍通过同一公网出口获取</text>
+
+        <rect class="node" x="1410" y="1030" width="505" height="185" fill="#ffedd5" stroke="#a8520b"/>
+        <text class="node-title" x="1433" y="1063">Upstream.Get</text>
+        <text class="node-body" x="1433" y="1092">全局串行 · 默认请求间隔 2 秒</text>
+        <text class="node-body" x="1433" y="1116">有限重试 · 16 MiB 响应上限</text>
+        <text class="node-body" x="1433" y="1140">HTTPS + DNS 公网校验 · 可选代理</text>
+        <text class="node-body" x="1433" y="1164">403 / 429 暂停本轮</text>
+
+        <path class="connector dashed" d="M1215 895V925H295V1035" stroke="#a8520b" marker-end="url(#arrow-orange)"/>
+        <path class="connector dashed" d="M1215 925H745V1035" stroke="#a8520b" marker-end="url(#arrow-orange)"/>
+        <path class="connector dashed" d="M1215 925H1175V1035" stroke="#a8520b" marker-end="url(#arrow-orange)"/>
+        <path class="connector dashed" d="M295 1200V1225M745 1200V1225M1175 1200V1225M295 1225H1660V1215" stroke="#a8520b" marker-end="url(#arrow-orange)"/>
+        <text class="small" x="530" y="1243">来源 HTML / JSON、文件树和头像下载共用公网出口。</text>
+
+        <!-- 5. Image processing and write path -->
+        <rect class="panel" x="45" y="1280" width="1910" height="205" rx="16" fill="#f3fbf5" stroke="#18754a"/>
+        <text class="panel-title" x="72" y="1317" fill="#17623f">5. 图片处理、预览与写回</text>
+
+        <rect class="node" x="75" y="1350" width="450" height="105" fill="#e4f5ea" stroke="#18754a"/>
+        <text class="node-title" x="98" y="1382">头像处理</text>
+        <text class="node-body" x="98" y="1410">下载 ≤10 MiB · 解码 ≤8MP · 回退候选</text>
+        <text class="node-body" x="98" y="1434">裁剪为 640×960 JPEG · 输出 ≤4 MiB</text>
+
+        <rect class="node" x="575" y="1350" width="340" height="105" fill="#e4f5ea" stroke="#18754a"/>
+        <text class="node-title" x="598" y="1382">默认预览</text>
+        <text class="node-body" x="598" y="1410">显示来源与更新计划</text>
+        <text class="node-body" x="598" y="1434">不向飞牛写入</text>
+
+        <rect class="node" x="965" y="1350" width="345" height="105" fill="#e4f5ea" stroke="#18754a"/>
+        <text class="node-title" x="988" y="1382">--apply 写入闸门</text>
+        <text class="node-body" x="988" y="1410">头像上传临时图片</text>
+        <text class="node-body" x="988" y="1434">保存简介 / profile_path</text>
+
+        <rect class="node" x="1360" y="1350" width="555" height="105" fill="#e4f5ea" stroke="#18754a"/>
+        <text class="node-title" x="1383" y="1382">FnOS API（直连，不走公网代理）</text>
+        <text class="node-body" x="1383" y="1410">上传头像 + SaveProfile；不创建人物</text>
+        <text class="node-body" x="1383" y="1434">不通过 SQL 修改 person / WAL / SHM</text>
+
+        <path class="connector" d="M1915 822H1970V1330H300V1340" stroke="#7841bd" marker-end="url(#arrow-purple)"/>
+        <path class="connector" d="M525 1402H565" stroke="#18754a" marker-end="url(#arrow-green)"/>
+        <path class="connector" d="M915 1402H955" stroke="#18754a" marker-end="url(#arrow-green)"/>
+        <path class="connector" d="M1310 1402H1350" stroke="#18754a" marker-end="url(#arrow-green)"/>
+
+        <!-- Persistence strip -->
+        <text class="panel-title" x="72" y="1525" fill="#485362">持久状态（彼此独立）</text>
+        <rect class="node" x="75" y="1545" width="560" height="75" fill="#f3f4f6" stroke="#707985"/>
+        <text class="node-title" x="98" y="1575">演员资料缓存</text>
+        <text class="node-body" x="265" y="1575">/config/actors/*.json · 规则与名称 revision</text>
+
+        <rect class="node" x="670" y="1545" width="650" height="75" fill="#f3f4f6" stroke="#707985"/>
+        <text class="node-title" x="693" y="1575">Gfriends 来源缓存</text>
+        <text class="node-body" x="895" y="1575">Filetree.json · 24h + 可重建索引库</text>
+
+        <rect class="node" x="1355" y="1545" width="560" height="75" fill="#f3f4f6" stroke="#707985"/>
+        <text class="node-title" x="1378" y="1575">watch 状态</text>
+        <text class="node-body" x="1500" y="1575">fnactor-state.db · GUID / revision / 退避重试</text>
+      </svg>
+      <figcaption>图中数据库 GUID 路径与名称搜索路径分开表示；公网来源共用 Upstream，飞牛 API 始终直连。</figcaption>
+    </figure>
+
+    <footer>
+      <span>对应实现说明：<a href="ARCHITECTURE.md">ARCHITECTURE.md</a> · <a href="INTERFACES.md">INTERFACES.md</a></span>
+      <span>本图为当前实现概览；修改行为边界时请同步更新文档。</span>
+    </footer>
+  </main>
+</body>
+</html>
