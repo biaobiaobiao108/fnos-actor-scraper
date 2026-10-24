@@ -32,7 +32,7 @@ fnactor [--actor NAME | --root DIR | --watch] [--db FILE] [--cache DIR] [--limit
 | `--watch-interval DURATION` | `1m` | 监控轮询间隔，范围 `10s` 到 `24h` |
 | `--help` | — | 显示帮助信息 |
 
-Docker 镜像无参数启动时只显示用法并保持空闲，不会自动批量扫描。在容器终端运行 `fnactor --limit 20` 才开始预览；显式添加 `--apply` 才会写入飞牛。数据库批量模式会跳过纯数字名称记录，因为在线来源按演员姓名检索；watch 模式静默忽略纯数字名称，空轮次会输出“=^._.^= [IDLE] 本轮检查完成，没有需要处理的新增或待重试演员。”常见流程日志使用 `[SCAN]`、`[ACTOR]`、`[OK]`、`[SKIP]`、`[WARN]`、`[RETRY]` 等纯文本状态标记，并用空行分隔主要区块。头像按 Gfriends、JavDB、Wikidata 的优先级逐个尝试并支持按需跳过已就绪次级来源；JavDB 仅在演员名/别名精确匹配且头像不是占位图时提供头像。简介来自 Wikidata。Minnano-AV 因持续返回 HTTP 403 已移除。
+Docker 镜像无参数启动时只显示用法并保持空闲，不会自动批量扫描。在容器终端运行 `fnactor --limit 20` 才开始预览；显式添加 `--apply` 才会写入飞牛。数据库批量模式会跳过纯数字名称记录，因为在线来源按演员姓名检索；watch 模式静默忽略纯数字名称，空轮次会输出“=^._.^= [IDLE] 本轮检查完成，没有需要处理的新增或待重试演员。”常见流程日志使用 `[SCAN]`、`[ACTOR]`、`[OK]`、`[SKIP]`、`[WARN]`、`[RETRY]` 等纯文本状态标记，并用空行分隔主要区块。头像按 Gfriends、JavDB、Wikidata 的优先级逐个尝试并支持按需跳过已就绪次级来源；JavDB 仅在演员名/别名精确匹配且头像不是占位图时提供头像。简介来自 Wikidata。Minnano-AV 因持续返回 HTTP 403 已移除。头像原图超过 400 万像素时会跳过该图片并尝试下一来源。
 
 日文姓名候选依次包含飞牛显示名称、`person.original_name`、用户配置的已确认别名、简体转繁体、繁体转日文新字体。转换只生成汉字字形候选，不推测假名读音；使用 `--probe` 时终端显示正在尝试的候选名。候选名称只用于上游查询，不参与飞牛档案匹配。
 
@@ -92,7 +92,7 @@ docker compose --profile watch stop fnactor-watch
 | `HTTP_PROXY` / `http_proxy` | 否 | 公网来源 HTTP 代理 |
 | `HTTPS_PROXY` / `https_proxy` | 否 | 公网来源 HTTPS 代理 |
 | `NO_PROXY` / `no_proxy` | 否 | 公网上游请求的代理绕过列表；默认包含 `localhost,127.0.0.1,::1`。FnOS API 客户端始终直连，不依赖此设置 |
-| `GOMEMLIMIT` | 否 | Go 运行时内存目标；容器推荐 `640MiB` |
+| `GOMEMLIMIT` | 否 | Go 运行时内存目标；容器默认 `128MiB` |
 
 代理变量应由部署环境提供，切勿写进源码、镜像或文档中的真实凭据示例。代理仅供公网来源使用；FnOS API 的 HTTP transport 禁用代理。公网 URL 必须是无用户信息的 HTTPS 地址；目标 DNS 不能解析到私网、保留或特殊用途 IP，直连时会固定到已校验的公网地址。配置代理时由代理建立外部连接，因此代理应可信。`.env` 含敏感信息，应限制读取权限并确认 Git 忽略。会话 token 返回 HTTP 401 时，如果同时配置了账号密码，程序会自动重新登录并重试该请求一次；只配置 token 时需手动提供新 token。
 
@@ -102,7 +102,7 @@ docker compose --profile watch stop fnactor-watch
 2. 确认 FnOS 数据库目录实际存在，并将它配置为 `.env` 的 `FNOS_DB_DIR`。
 3. 将数据库**目录**挂载至 `/fnos-db`，并将可写缓存目录持久化到 `/config`。数据库连接为 SQLite `mode=ro`，但 Docker 挂载目录本身不能只读，否则 WAL 模式需要的 `-shm` 锁文件无法处理。
 4. 使用 host 网络并把 `FNOS_URL` 设置为 `http://127.0.0.1:5666`；FnOS API 客户端会直连，无需依赖 `NO_PROXY`。
-5. 容器设置 `GOMEMLIMIT=640MiB` 和 `mem_limit: 768m`。Go 内存目标不是 cgroup 硬上限；后者才是容器的硬边界。
+5. 容器设置 `GOMEMLIMIT=128MiB` 和 `mem_limit: 768m`。Go 内存目标不是 cgroup 硬上限；后者才是容器的硬边界。
 6. 先小批量预览，确认人物和待补字段，再使用 `--apply` 实际更新。
 
 数据库挂载示例：
@@ -128,9 +128,9 @@ volumes:
 ## 图片与内存边界
 
 - 通用上游响应上限 16 MiB，必须流式计数并在超限时停止读取。
-- 头像文件最多 10 MiB，图像最多 16,000,000 像素，处理后 JPEG 最多 4 MiB。
+- 头像文件最多 10 MiB，图像最多 4,000,000 像素，处理后 JPEG 最多 4 MiB。
 - 图片按单张处理，转换为 640×960 JPEG。下载、解码或尺寸失败时跳过当前候选并尝试下一来源；全部失败才跳过头像。如果简介可用仍可写入简介，并继续下一位演员。飞牛 API 登录、读取或保存失败仍应记录错误；监控会保留失败演员以便后续轮询重试。
-- Go `GOMEMLIMIT=640MiB` 是运行时内存目标；Compose `mem_limit: 768m` 是容器 cgroup 上限。缓存与并发必须有界，二者都不能替代逐张处理和及时释放大型 buffer。
+- Go `GOMEMLIMIT=128MiB` 是运行时内存目标；Compose `mem_limit: 768m` 是容器 cgroup 上限。缓存与并发必须有界，二者都不能替代逐张处理和及时释放大型 buffer。
 - 使用 `docker stats fnactor` 监控实际 NAS 内存占用；发生容器 OOM 时，先降低并发并定位未受限的响应体或图像缓冲，再考虑调整容器限制。
 
 ## 飞牛 API 与在线来源

@@ -28,10 +28,11 @@ type options struct {
 	apply, overwrite, refresh, probe, watch bool
 }
 type task struct {
-	name          string
-	count         int
-	person        *FnPerson
-	lookupAliases []string
+	name             string
+	count            int
+	person           *FnPerson
+	lookupAliases    []string
+	hasMissingFields bool
 }
 
 func main() {
@@ -180,7 +181,7 @@ func run() error {
 		return err
 	}
 	jobs := make(chan task)
-	results := make(chan error, len(tasks))
+	results := make(chan error, min(o.concurrency, len(tasks)))
 	batchCtx, cancelBatch := context.WithCancelCause(ctx)
 	defer cancelBatch(nil)
 	workers := min(o.concurrency, len(tasks))
@@ -264,7 +265,8 @@ func collectTasks(o options) ([]task, error) {
 		if originalName := strings.TrimSpace(person.OriginalName); originalName != "" && normalizeName(originalName) != normalizeName(name) {
 			aliases = append(aliases, originalName)
 		}
-		result = append(result, task{name: name, count: 1, person: &person, lookupAliases: aliases})
+		result = append(result, task{name: name, count: 1, person: &person, lookupAliases: aliases,
+			hasMissingFields: !person.hasBiography || !person.hasProfilePath})
 	}
 	if skippedNumeric > 0 && !o.watch {
 		fmt.Printf("[SKIP] 跳过 %d 条纯数字名称记录（看起来是演员编号，无法按名称查询资料）\n", skippedNumeric)

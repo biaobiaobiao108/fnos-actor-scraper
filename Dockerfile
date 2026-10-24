@@ -16,6 +16,6 @@ COPY docker-entrypoint.sh /usr/local/bin/fnactor-entrypoint
 RUN chmod +x /usr/local/bin/fnactor-entrypoint
 ENV CACHE_DIR=/config \
     FNOS_DB_PATH=/fnos-db/trimmedia.db \
-    GOMEMLIMIT=640MiB \
+    GOMEMLIMIT=128MiB \
     GOGC=75
 ENTRYPOINT ["/usr/local/bin/fnactor-entrypoint"]

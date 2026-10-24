@@ -64,6 +64,10 @@ func (client *FnOSClient) request(ctx context.Context, path string, method strin
 		bodyBytes = data
 	}
 	hasBody := body != nil
+	return client.requestBytes(ctx, path, method, bodyBytes, hasBody, contentType, destination)
+}
+
+func (client *FnOSClient) requestBytes(ctx context.Context, path string, method string, bodyBytes []byte, hasBody bool, contentType string, destination any) error {
 	token := client.tokenValue()
 	err := client.requestOnce(ctx, path, method, bodyBytes, hasBody, contentType, destination)
 	if !isFnOSUnauthorized(err) {
@@ -317,7 +321,7 @@ func (client *FnOSClient) UploadProfile(ctx context.Context, image []byte) (stri
 	var result struct {
 		HashPath string `json:"hash_path"`
 	}
-	if err := client.request(ctx, "/image/temp/upload", http.MethodPost, &body, writer.FormDataContentType(), &result); err != nil {
+	if err := client.requestBytes(ctx, "/image/temp/upload", http.MethodPost, body.Bytes(), true, writer.FormDataContentType(), &result); err != nil {
 		return "", err
 	}
 	if result.HashPath == "" {

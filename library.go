@@ -60,9 +60,12 @@ func loadLocalPeople(path string) ([]FnPerson, error) {
 	people := make([]FnPerson, 0, 256)
 	for peopleRows.Next() {
 		var person FnPerson
-		if err := peopleRows.Scan(&person.GUID, &person.TrimID, &person.TMDBID, &person.IMDBID, &person.Name, &person.OriginalName, &person.Biography, &person.ProfilePath); err != nil {
+		var biography, profilePath string
+		if err := peopleRows.Scan(&person.GUID, &person.TrimID, &person.TMDBID, &person.IMDBID, &person.Name, &person.OriginalName, &biography, &profilePath); err != nil {
 			return nil, err
 		}
+		person.hasBiography = strings.TrimSpace(biography) != ""
+		person.hasProfilePath = strings.TrimSpace(profilePath) != ""
 		if strings.HasPrefix(strings.ToUpper(person.TrimID), "LOCAL_PERSON_") && person.TMDBID == 0 && person.IMDBID == "" {
 			people = append(people, person)
 		}

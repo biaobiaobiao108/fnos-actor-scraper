@@ -31,4 +31,6 @@ type FnPerson struct {
 	NameLocked        bool   `json:"name_locked,omitempty"`
 	BiographyLocked   bool   `json:"biography_locked,omitempty"`
 	ProfilePathLocked bool   `json:"profile_path_locked,omitempty"`
+	hasBiography      bool
+	hasProfilePath    bool
 }

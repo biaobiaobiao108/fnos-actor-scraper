@@ -75,7 +75,7 @@ func processNewActors(ctx context.Context, client *FnOSClient, providers *Provid
 			continue
 		}
 		revision := providers.lookupRevision(item.name, item.lookupAliases...)
-		missing := item.person != nil && (strings.TrimSpace(item.person.Biography) == "" || strings.TrimSpace(item.person.ProfilePath) == "")
+		missing := item.person != nil && item.hasMissingFields
 		due, err := store.ShouldProcess(ctx, key, now, revision, missing)
 		if err != nil {
 			return err

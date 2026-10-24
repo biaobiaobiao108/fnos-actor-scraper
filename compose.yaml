@@ -19,7 +19,7 @@ x-fnactor-common: &fnactor-common
     FNOS_TOKEN: ${FNOS_TOKEN:-}
     UPSTREAM_DELAY_MS: ${UPSTREAM_DELAY_MS:-2000}
     JAVDB_BASE_URL: ${JAVDB_BASE_URL:-https://javdb570.com}
-    GOMEMLIMIT: ${GOMEMLIMIT:-640MiB}
+    GOMEMLIMIT: ${GOMEMLIMIT:-128MiB}
     GOGC: ${GOGC:-75}
     http_proxy: ${http_proxy:-}
     https_proxy: ${https_proxy:-}
